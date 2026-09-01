@@ -62,29 +62,46 @@ Returns liveness and booleans for required upstream configuration. It never retu
 
 ### `GET /api/rest/views/allocation-history/:chainId/:address` (test)
 
-Returns the `VaultAllocationTimeline` shape proposed for Kong. This prototype reads only raw event tables from Envio and
-materializes block-end state through the configured archive RPC. It is intentionally limited to Ethereum and these vaults:
+Returns the schema-version-2, chart-ready REST projection proposed for Kong. The response contains vault metadata, pagination,
+and a denormalized `entries` array; it does not expose top-level strategies, states, transitions, proposals, or raw events.
+This prototype reads events from Envio and enriches them through the configured archive RPC. It is intentionally limited to
+Ethereum and these vaults:
 
 - `yvUSDC-1`: `0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204`
 - `yvUSDT-1`: `0x310B7Ea7475A0B449Cfd73bE81522F1B88eFAFaa`
 - `yvUSD`: `0x696d02Db93291651ED510704c9b286841d506987`
 
-The route defaults to the latest 25 event transitions plus a confirmed live tail. For every transition at block `N`, `states`
-contains an immediate pre-state read at `N - 1` and a post-state read at `N`; the transition links them through `fromStateId`
-and `toStateId`. Adjacent duplicate state blocks are returned once.
+The route defaults to at most 25 entries, including a safe-block `current_snapshot`. It scans a bounded window of the latest 100
+raw transition blocks, removes REST-excluded accounting noise, groups related actions, and then applies the requested response
+limit. Each meaningful entry embeds its complete
+whole-group `before` and `after` allocation, calculated strategy changes, compact transaction steps, policy provenance when
+available, and classification evidence. Multi-transaction keeper runs are grouped only when historical allocator trigger
+replay, traced execution path, allocator configuration, and state continuity agree.
 
-Responses default to `direction=desc` (newest first). Pass `direction=asc` for chronological order. `limit` accepts 1–100
-historical event transitions, and `events=1` includes raw events for the returned state blocks. The response echoes its
+Responses default to `direction=desc` (newest first). Pass `direction=asc` for chronological order. `limit` accepts 1–100 final
+public entries; a response can contain fewer when the bounded scan does not contain enough qualifying actions. Raw events are
+deliberately not exposed by this REST route; they belong in the future Kong GraphQL detail surface. The response echoes its
 `direction` and uses the Kong cache headers from the spec.
 
-Envio `Deposit` and `Withdraw` rows enrich effects without creating standalone allocation samples. Associated strategy debt
-changes use `kind: "deposit_driven_debt_update"` or `kind: "withdrawal_driven_debt_update"` and expose `vaultActivities`
-with assets, shares, participants, and whether the transaction called the vault directly or through a router/Safe. Known
-keeper debt changes without a matching proposal are `allocator_execution`, not manual updates.
+Envio `Deposit` and `Withdraw` rows are context rather than allocation intent. Pure debt updates that only service withdrawals
+do not consume space in the public entries array. If the same transaction or block contains allocator execution, a confirmed
+`DEBT_MANAGER` caller, bad-debt handling, or configuration/lifecycle activity, that action remains visible under its action kind
+and retains `vaultActivities` with assets, shares, participants, and direct/routed path. Deposit-driven debt updates remain
+visible. Report-only accounting transitions are also omitted.
+
+Archive traces distinguish the top-level originator, relayer path, allocator, and immediate vault caller. Envio `RoleSet`
+history verifies whether that caller held `DEBT_MANAGER` at the execution block. Allocator calls are replayed through historical
+`shouldUpdateDebt`; target matches within the response's disclosed sub-unit tolerance become `target_maintenance`, while larger
+differences become `allocator_override`.
+Unresolved traces, role history, or trigger calls remain explicit limitations instead of being inferred from `transactionFrom`.
+
+DOA proposal age is not an execution status. A policy application is `confirmed` only when Envio supplies exact matching
+allocator configuration events. When the archive-RPC target configuration exactly matches a proposal but Envio lacks the
+shared allocator event, the inline policy is explicitly `inferred_from_historical_config`.
 
 This is a shape-validation endpoint, not the production refresh pipeline: it computes on demand, keeps a 15-minute in-memory
-cache, and reads at most the latest 1,000 rows from each Envio event family. The documented Ethereum TKS DOA keeper is labeled
-directly; other actors are derived from allocator/vault role events when available and remain `unknown` otherwise.
+cache, and reads at most the latest 1,000 rows from each Envio event family. Kong should materialize completed entries for
+predictable public latency and expose slower normalized investigation through GraphQL.
 
 ## Local development
 

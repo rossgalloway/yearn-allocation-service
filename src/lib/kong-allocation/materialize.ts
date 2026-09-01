@@ -4,7 +4,9 @@ import {
   contractSelectors,
   decodeUint,
   encodeAddressCall,
-  readContractCalls
+  encodeAddressPairCall,
+  readContractCalls,
+  readVaultDebtAllocators
 } from './rpc'
 import type { Address, AllocationSourceEvent, AllocationState, AllocationStateStrategy } from './types'
 
@@ -49,8 +51,11 @@ function strategyReferences(events: readonly AllocationSourceEvent[]): StrategyR
 
 function allocatorReferences(events: readonly AllocationSourceEvent[]): AllocatorReference[] {
   return events
-    .filter((event) => event.eventName === 'NewDebtAllocator')
-    .map((event) => ({ address: address(event.args.allocator), assignedBlock: event.blockNumber }))
+    .filter((event) => event.eventName === 'NewDebtAllocator' || event.eventName === 'UpdateDebtAllocator')
+    .map((event) => ({
+      address: address(event.eventName === 'UpdateDebtAllocator' ? event.args.debtAllocator : event.args.allocator),
+      assignedBlock: event.blockNumber
+    }))
     .filter((item): item is AllocatorReference => item.address !== null)
     .sort((left, right) => left.assignedBlock - right.assignedBlock)
 }
@@ -95,6 +100,11 @@ export async function materializeStates(input: {
 }): Promise<MaterializedStates> {
   const strategies = strategyReferences(input.events)
   const allocators = allocatorReferences(input.events)
+  const rpcAllocators = await readVaultDebtAllocators(
+    input.chainId,
+    input.vaultAddress,
+    input.blocks.map((block) => block.blockNumber)
+  )
   const calls = input.blocks.flatMap((block) => {
     const blockCalls: ContractCall[] = [
       {
@@ -117,7 +127,7 @@ export async function materializeStates(input: {
       }
     ]
     const candidates = strategies.filter((strategy) => strategy.firstSeenBlock <= block.blockNumber)
-    const allocator = allocatorAtBlock(allocators, block.blockNumber)
+    const allocator = rpcAllocators.get(block.blockNumber) ?? allocatorAtBlock(allocators, block.blockNumber)
     for (const strategy of candidates) {
       blockCalls.push({
         key: key(block.blockNumber, 'strategy', strategy.address),
@@ -126,20 +136,12 @@ export async function materializeStates(input: {
         blockNumber: block.blockNumber
       })
       if (allocator) {
-        blockCalls.push(
-          {
-            key: key(block.blockNumber, 'targetRatio', strategy.address),
-            address: allocator,
-            data: encodeAddressCall(contractSelectors.targetRatio, strategy.address),
-            blockNumber: block.blockNumber
-          },
-          {
-            key: key(block.blockNumber, 'maxRatio', strategy.address),
-            address: allocator,
-            data: encodeAddressCall(contractSelectors.maxRatio, strategy.address),
-            blockNumber: block.blockNumber
-          }
-        )
+        blockCalls.push({
+          key: key(block.blockNumber, 'strategyConfig', strategy.address),
+          address: allocator,
+          data: encodeAddressPairCall(contractSelectors.strategyConfig, input.vaultAddress, strategy.address),
+          blockNumber: block.blockNumber
+        })
       }
     }
     return blockCalls
@@ -153,7 +155,7 @@ export async function materializeStates(input: {
       throw new ArchiveRpcUpstreamError(`Vault accounting calls failed at block ${block.blockNumber}`)
     }
 
-    const allocator = allocatorAtBlock(allocators, block.blockNumber)
+    const allocator = rpcAllocators.get(block.blockNumber) ?? allocatorAtBlock(allocators, block.blockNumber)
     const strategyRows = strategies
       .filter((strategy) => strategy.firstSeenBlock <= block.blockNumber)
       .map((strategy): AllocationStateStrategy => {
@@ -162,12 +164,12 @@ export async function materializeStates(input: {
         const lastReport = decodeUint(result, 1)
         const currentDebt = decodeUint(result, 2) ?? 0n
         const maxDebt = decodeUint(result, 3)
-        const targetRatio = allocator
-          ? decodeUint(results.get(key(block.blockNumber, 'targetRatio', strategy.address)) ?? null)
+        const strategyConfig = allocator
+          ? (results.get(key(block.blockNumber, 'strategyConfig', strategy.address)) ?? null)
           : null
-        const maxRatio = allocator
-          ? decodeUint(results.get(key(block.blockNumber, 'maxRatio', strategy.address)) ?? null)
-          : null
+        const allocatorAdded = decodeUint(strategyConfig, 0)
+        const targetRatio = decodeUint(strategyConfig, 1)
+        const maxRatio = decodeUint(strategyConfig, 2)
         return {
           strategyAddress: strategy.address,
           currentDebt: currentDebt.toString(),
@@ -176,6 +178,7 @@ export async function materializeStates(input: {
           maxDebtBps: maxDebt === null ? null : bps(maxDebt, totalAssets),
           targetDebtRatioBps: targetRatio !== null && targetRatio <= 10_000n ? Number(targetRatio) : null,
           maxDebtRatioBps: maxRatio !== null && maxRatio <= 10_000n ? Number(maxRatio) : null,
+          allocatorAdded: allocatorAdded === null ? null : allocatorAdded !== 0n,
           activation: safeNumber(activation),
           lastReport: safeNumber(lastReport)
         }
@@ -195,6 +198,7 @@ export async function materializeStates(input: {
       totalDebt: totalDebt.toString(),
       totalIdle: totalIdle.toString(),
       unallocatedBps: bps(totalIdle, totalAssets),
+      allocatorAddress: allocator,
       sourceEventIds: blockEvents.map((event) => event.id),
       strategies: strategyRows
     }

@@ -1,4 +1,4 @@
-import type { Address, Hash, RpcTransactionContext, VaultAllocationVault } from './types'
+import type { Address, AllocatorTriggerReplay, Hash, RpcTransactionContext, VaultAllocationVault } from './types'
 
 const REQUEST_TIMEOUT_MS = 30_000
 const RPC_BATCH_SIZE = 100
@@ -13,8 +13,10 @@ const SELECTOR = {
   totalDebt: '0xfc7b9c18',
   totalIdle: '0x9aa7df94',
   strategies: '0x39ebf823',
-  targetRatio: '0x0b90938b',
-  maxRatio: '0x18043a36'
+  roleManager: '0x79b98917',
+  debtAllocator: '0x64724604',
+  strategyConfig: '0x0dedca24',
+  shouldUpdateDebt: '0x4ad0f1d0'
 } as const
 
 interface RpcRequest {
@@ -158,6 +160,13 @@ export function encodeAddressCall(selector: Hash, value: Address): Hash {
   return `${selector}${value.slice(2).toLowerCase().padStart(64, '0')}` as Hash
 }
 
+export function encodeAddressPairCall(selector: Hash, first: Address, second: Address): Hash {
+  return `${selector}${first.slice(2).toLowerCase().padStart(64, '0')}${second
+    .slice(2)
+    .toLowerCase()
+    .padStart(64, '0')}` as Hash
+}
+
 export async function readContractCalls(
   chainId: number,
   calls: readonly ContractCall[]
@@ -206,13 +215,20 @@ export async function readLatestSafeBlock(chainId: number): Promise<{ blockNumbe
 
 export async function readTransactionContexts(
   chainId: number,
-  transactionHashes: readonly Hash[]
+  transactionHashes: readonly Hash[],
+  vaultAddress: Address
 ): Promise<Map<Hash, RpcTransactionContext>> {
   const unique = [...new Set(transactionHashes)]
-  const responses = await batchedRequests(
-    chainId,
-    unique.map((transactionHash) => ({ method: 'eth_getTransactionByHash', params: [transactionHash] }))
-  )
+  const [responses, traces] = await Promise.all([
+    batchedRequests(
+      chainId,
+      unique.map((transactionHash) => ({ method: 'eth_getTransactionByHash', params: [transactionHash] }))
+    ),
+    batchedRequests(
+      chainId,
+      unique.map((transactionHash) => ({ method: 'trace_transaction', params: [transactionHash] }))
+    )
+  ])
   return new Map(
     unique.map((transactionHash, index) => {
       const value = responses[index]?.result as { from?: unknown; to?: unknown; input?: unknown } | null | undefined
@@ -228,9 +244,160 @@ export async function readTransactionContexts(
         typeof value?.input === 'string' && /^0x[a-fA-F0-9]{8,}$/.test(value.input)
           ? (value.input.slice(0, 10).toLowerCase() as Hash)
           : null
-      return [transactionHash, { from, to, inputSelector }]
+      const trace = traceContext(traces[index]?.result, vaultAddress)
+      return [transactionHash, { from, to, inputSelector, ...trace }]
     })
   )
+}
+
+interface TraceCall {
+  from: Address
+  to: Address
+  traceAddress: number[]
+}
+
+function rpcAddress(value: unknown): Address | null {
+  return typeof value === 'string' && /^0x[a-fA-F0-9]{40}$/.test(value) ? (value.toLowerCase() as Address) : null
+}
+
+function traceCalls(value: unknown): TraceCall[] | null {
+  if (!Array.isArray(value)) return null
+  const calls = value.flatMap((item): TraceCall[] => {
+    if (!item || typeof item !== 'object') return []
+    const trace = item as { action?: unknown; traceAddress?: unknown; type?: unknown }
+    if (trace.type !== 'call' || !trace.action || typeof trace.action !== 'object') return []
+    const action = trace.action as { from?: unknown; to?: unknown }
+    const from = rpcAddress(action.from)
+    const to = rpcAddress(action.to)
+    if (!from || !to || !Array.isArray(trace.traceAddress) || !trace.traceAddress.every(Number.isSafeInteger)) return []
+    return [{ from, to, traceAddress: trace.traceAddress as number[] }]
+  })
+  return calls
+}
+
+function isTracePrefix(candidate: readonly number[], target: readonly number[]): boolean {
+  return candidate.length <= target.length && candidate.every((value, index) => value === target[index])
+}
+
+function callPath(calls: readonly TraceCall[], target: TraceCall): Address[] {
+  const ancestors = calls
+    .filter((call) => isTracePrefix(call.traceAddress, target.traceAddress))
+    .sort((left, right) => left.traceAddress.length - right.traceAddress.length)
+  const path: Address[] = []
+  for (const call of ancestors) {
+    if (path.at(-1) !== call.from) path.push(call.from)
+    if (path.at(-1) !== call.to) path.push(call.to)
+  }
+  return path
+}
+
+function traceContext(
+  value: unknown,
+  vaultAddress: Address
+): Pick<RpcTransactionContext, 'traceStatus' | 'callPath' | 'immediateVaultCaller'> {
+  const calls = traceCalls(value)
+  if (!calls) return { traceStatus: 'unavailable', callPath: [], immediateVaultCaller: null }
+  const vaultCalls = calls
+    .filter((call) => call.to === vaultAddress.toLowerCase())
+    .sort((left, right) => left.traceAddress.length - right.traceAddress.length)
+  if (vaultCalls.length === 0) return { traceStatus: 'available', callPath: [], immediateVaultCaller: null }
+  const callers = [...new Set(vaultCalls.map((call) => call.from))]
+  return {
+    traceStatus: 'available',
+    callPath: callPath(calls, vaultCalls[0]),
+    immediateVaultCaller: callers.length === 1 ? callers[0] : null
+  }
+}
+
+function dynamicBytes(data: Hash | null, offsetWord: number): Hash | null {
+  const offset = decodeUint(data, offsetWord)
+  if (!data || offset === null || offset > BigInt(Number.MAX_SAFE_INTEGER)) return null
+  const body = data.slice(2)
+  const lengthWordStart = Number(offset) * 2
+  if (body.length < lengthWordStart + 64) return null
+  const length = BigInt(`0x${body.slice(lengthWordStart, lengthWordStart + 64)}`)
+  if (length > BigInt(Number.MAX_SAFE_INTEGER)) return null
+  const valueStart = lengthWordStart + 64
+  const valueEnd = valueStart + Number(length) * 2
+  return body.length >= valueEnd ? (`0x${body.slice(valueStart, valueEnd)}` as Hash) : null
+}
+
+function triggerTarget(calldata: Hash | null): bigint | null {
+  if (!calldata || calldata.length < 2 + 8 + 64 * 3) return null
+  const targetStart = 2 + 8 + 64 * 2
+  return BigInt(`0x${calldata.slice(targetStart, targetStart + 64)}`)
+}
+
+function bytesText(value: Hash | null): string | null {
+  if (!value) return null
+  try {
+    return new TextDecoder().decode(Uint8Array.from(Buffer.from(value.slice(2), 'hex'))) || null
+  } catch {
+    return null
+  }
+}
+
+export interface AllocatorTriggerReplayInput {
+  transactionHash: Hash
+  allocatorAddress: Address
+  vaultAddress: Address
+  strategyAddress: Address
+  blockNumber: number
+  expectedDebt: string
+  matchTolerance: string
+}
+
+export async function readAllocatorTriggerReplays(
+  chainId: number,
+  inputs: readonly AllocatorTriggerReplayInput[]
+): Promise<Map<Hash, AllocatorTriggerReplay[]>> {
+  const calls = inputs.map(
+    (input, index): ContractCall => ({
+      key: String(index),
+      address: input.allocatorAddress,
+      data: encodeAddressPairCall(contractSelectors.shouldUpdateDebt, input.vaultAddress, input.strategyAddress),
+      blockNumber: Math.max(0, input.blockNumber - 1)
+    })
+  )
+  const results = await readContractCalls(chainId, calls)
+  const byTransaction = new Map<Hash, AllocatorTriggerReplay[]>()
+  for (const [index, input] of inputs.entries()) {
+    const result = results.get(String(index)) ?? null
+    const shouldUpdateWord = decodeUint(result)
+    const shouldUpdate = shouldUpdateWord === null ? null : shouldUpdateWord !== 0n
+    const payload = dynamicBytes(result, 1)
+    const recommended = shouldUpdate === true ? triggerTarget(payload) : null
+    const expected = /^\d+$/.test(input.expectedDebt) ? BigInt(input.expectedDebt) : null
+    const tolerance = /^\d+$/.test(input.matchTolerance) ? BigInt(input.matchTolerance) : 0n
+    const difference =
+      recommended !== null && expected !== null
+        ? recommended >= expected
+          ? recommended - expected
+          : expected - recommended
+        : null
+    const status =
+      shouldUpdate === null
+        ? 'unavailable'
+        : shouldUpdate && difference !== null && difference <= tolerance
+          ? 'matched'
+          : 'not_matched'
+    const replay: AllocatorTriggerReplay = {
+      strategyAddress: input.strategyAddress,
+      allocatorAddress: input.allocatorAddress,
+      readAtBlock: Math.max(0, input.blockNumber - 1),
+      status,
+      shouldUpdate,
+      expectedDebt: input.expectedDebt,
+      recommendedDebt: recommended?.toString() ?? null,
+      absoluteDifference: difference?.toString() ?? null,
+      matchTolerance: input.matchTolerance,
+      reason: shouldUpdate === false ? bytesText(payload) : null
+    }
+    const current = byTransaction.get(input.transactionHash) ?? []
+    current.push(replay)
+    byTransaction.set(input.transactionHash, current)
+  }
+  return byTransaction
 }
 
 export async function readVaultMetadata(
@@ -282,6 +449,38 @@ export async function readContractNames(
     }))
   )
   return new Map(unique.map((contractAddress) => [contractAddress, decodeString(results.get(contractAddress) ?? null)]))
+}
+
+export async function readVaultDebtAllocators(
+  chainId: number,
+  vaultAddress: Address,
+  blockNumbers: readonly number[]
+): Promise<Map<number, Address | null>> {
+  const unique = [...new Set(blockNumbers)]
+  const roleManagers = await readContractCalls(
+    chainId,
+    unique.map((blockNumber) => ({
+      key: String(blockNumber),
+      address: vaultAddress,
+      data: SELECTOR.roleManager,
+      blockNumber
+    }))
+  )
+  const allocatorCalls = unique.flatMap((blockNumber): ContractCall[] => {
+    const roleManager = decodeAddress(roleManagers.get(String(blockNumber)) ?? null)
+    return roleManager
+      ? [
+          {
+            key: String(blockNumber),
+            address: roleManager,
+            data: encodeAddressCall(SELECTOR.debtAllocator, vaultAddress),
+            blockNumber
+          }
+        ]
+      : []
+  })
+  const allocators = await readContractCalls(chainId, allocatorCalls)
+  return new Map(unique.map((blockNumber) => [blockNumber, decodeAddress(allocators.get(String(blockNumber)) ?? null)]))
 }
 
 export const contractSelectors = SELECTOR

@@ -1,5 +1,40 @@
 # Allocation data contract
 
+This service currently has two REST read models:
+
+- `/api/allocations` preserves the earlier executed-versus-optimizer overlay contract described below.
+- `/api/rest/views/allocation-history/:chainId/:address` is the Kong allocation-history prototype. Its version 2 public
+  response is a chart-ready `entries` collection rather than a normalized state/event graph.
+
+## Allocation-history REST projection
+
+Each public history entry embeds everything needed for website hydration:
+
+- its logical action kind and whole-group block/timestamp range;
+- complete archive-RPC `before` and `after` allocation snapshots;
+- strategy metadata and calculated debt/ratio changes;
+- an inline DOA policy summary when exact configuration events or historical target equality support it;
+- compact transaction steps with originator, traced call path, immediate vault caller, historical `DEBT_MANAGER` evidence,
+  and allocator-trigger replay; and
+- classification confidence, supporting evidence, and explicit limitations.
+
+The route does not expose top-level states, transitions, strategy directories, raw Envio events, or unapplied proposal rows.
+Those remain normalized internally so Kong can eventually expose investigative GraphQL queries without forcing the public REST
+consumer to join objects or make follow-up requests.
+
+Standalone deposit/withdrawal context, report-only accounting changes, and pure debt updates that only service withdrawals are
+excluded from the default REST entries. Withdrawal context never overrides stronger intent evidence: allocator execution,
+historically confirmed `DEBT_MANAGER` calls, bad-debt handling, and configuration/lifecycle actions remain visible and retain
+their inline `vaultActivities`. A `current_snapshot` entry supplies the safe-block allocation without claiming that all drift
+since the previous action was one execution.
+
+The prototype computes entries on demand and caches them for 15 minutes. Kong should materialize immutable completed entries
+ahead of requests and serve them through CDN caching; raw GraphQL investigation may remain slower.
+
+For this prototype, `limit` is applied after REST filtering and multi-step grouping. Each request scans at most the latest 100
+raw transition blocks; `pagination.hasMore` remains true when older raw history or additional qualifying entries exist. Kong's
+materialized implementation should paginate completed public entries directly rather than repeat this bounded scan behavior.
+
 ## Inputs
 
 The service combines two authorities without conflating them.

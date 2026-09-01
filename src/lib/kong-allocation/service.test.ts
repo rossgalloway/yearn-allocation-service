@@ -17,6 +17,7 @@ function latestState(): AllocationState {
     totalDebt: '100',
     totalIdle: '0',
     unallocatedBps: 0,
+    allocatorAddress: null,
     sourceEventIds: [],
     strategies: [
       {
@@ -27,6 +28,7 @@ function latestState(): AllocationState {
         maxDebtBps: 10_000,
         targetDebtRatioBps: null,
         maxDebtRatioBps: null,
+        allocatorAdded: null,
         activation: 900,
         lastReport: 950
       },
@@ -38,6 +40,7 @@ function latestState(): AllocationState {
         maxDebtBps: 0,
         targetDebtRatioBps: null,
         maxDebtRatioBps: null,
+        allocatorAdded: null,
         activation: 0,
         lastReport: 0
       }
@@ -94,5 +97,6 @@ describe('Kong allocation timeline helpers', () => {
     ]
 
     expect(eventBlocks(events)).toEqual([{ blockNumber: 100, blockTimestamp: 1000 }])
+    expect(eventBlocks(events, 0)).toEqual([])
   })
 })

@@ -135,6 +135,26 @@ describe('buildTransitions', () => {
     ])
   })
 
+  it('keeps withdrawal activity as context when a known allocator keeper updates debt', () => {
+    const withdrawal = event({
+      id: '1:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1',
+      eventName: 'Withdraw',
+      logIndex: 1,
+      strategyAddress: undefined,
+      args: { sender: mainnetDoaKeeper, receiver: keeper, owner: keeper, assets: '100', shares: '90' }
+    })
+    const [transition] = buildTransitions({
+      chainId: 1,
+      vaultAddress: vault,
+      points: [point(100)],
+      events: [event({ transactionFrom: mainnetDoaKeeper }), withdrawal]
+    })
+
+    expect(transition.kind).toBe('allocator_execution')
+    expect(transition.effects[0].kind).toBe('allocator_execution')
+    expect(transition.effects[0].vaultActivities?.[0].kind).toBe('withdrawal')
+  })
+
   it('classifies and enriches deposit-driven debt changes', () => {
     const deposit = event({
       id: '1:0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1',

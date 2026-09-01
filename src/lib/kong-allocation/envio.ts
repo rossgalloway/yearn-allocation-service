@@ -4,6 +4,13 @@ import type { Address, AllocationSourceEvent, Hash } from './types'
 const EVENT_PAGE_SIZE = 1000
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/
 const HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/
+const NORMALIZED_SUPPLEMENT_EVENT_NAMES = [
+  'UpdateDebtAllocator',
+  'UpdateStrategyDebtRatio',
+  'UpdateStrategyDebtRatios',
+  'UpdateKeeper',
+  'GovernanceTransferred'
+] as const
 
 interface EventDefinition {
   table: string
@@ -292,6 +299,49 @@ function sourceEvent(definition: EventDefinition, row: Record<string, unknown>):
   }
 }
 
+function normalizedSourceEvent(row: Record<string, unknown>): AllocationSourceEvent {
+  const sourceAddress = address(row.sourceAddress)
+  if (!sourceAddress) throw new Error('Envio returned an invalid normalized source address')
+  const transactionHash = hash(row.transactionHash, 'transaction hash')
+  const logIndex = safeInteger(row.logIndex, 'log index')
+  const eventName = typeof row.eventName === 'string' ? row.eventName : null
+  if (!eventName) throw new Error('Envio returned an invalid normalized event name')
+  let args: Record<string, unknown>
+  try {
+    const parsed = typeof row.argsJson === 'string' ? JSON.parse(row.argsJson) : null
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid args')
+    args = parsed as Record<string, unknown>
+  } catch {
+    throw new Error(`Envio returned invalid normalized args for ${eventName}`)
+  }
+  const sourceType = typeof row.sourceType === 'string' ? row.sourceType.toLowerCase() : ''
+  const sourceLabel: AllocationSourceEvent['sourceLabel'] = sourceType.includes('allocator')
+    ? 'debtAllocator'
+    : sourceType.includes('vault')
+      ? 'vault'
+      : 'unknown'
+  return {
+    id: `${safeInteger(row.chainId, 'chain ID')}:${transactionHash}:${logIndex}`,
+    sourceAddress,
+    sourceLabel,
+    eventName,
+    signature: hash(row.signature, 'event signature'),
+    blockNumber: safeInteger(row.blockNumber, 'block number'),
+    blockTimestamp: safeInteger(row.blockTimestamp, 'block timestamp'),
+    transactionHash,
+    transactionIndex: safeInteger(row.transactionIndex, 'transaction index'),
+    logIndex,
+    transactionFrom: address(row.topLevelTransactionFrom),
+    transactionTo: address(row.topLevelTransactionTo),
+    inputSelector:
+      typeof row.topLevelInputSelector === 'string' && /^0x[a-fA-F0-9]{8}$/.test(row.topLevelInputSelector)
+        ? (row.topLevelInputSelector.toLowerCase() as Hash)
+        : null,
+    strategyAddress: address(row.strategyAddress),
+    args
+  }
+}
+
 function rows(data: Record<string, unknown>, alias: string): Record<string, unknown>[] {
   const value = data[alias]
   if (!Array.isArray(value)) throw new Error(`Envio response omitted ${alias}`)
@@ -301,6 +351,7 @@ function rows(data: Record<string, unknown>, alias: string): Record<string, unkn
 export interface EnvioEventBatch {
   events: AllocationSourceEvent[]
   truncatedEventFamilies: string[]
+  normalizedSupplementAvailable: boolean
 }
 
 export async function fetchKongAllocationEvents(input: {
@@ -308,6 +359,44 @@ export async function fetchKongAllocationEvents(input: {
   vaultAddress: Address
   toBlock: number
 }): Promise<EnvioEventBatch> {
+  let normalizedSupplementAvailable = true
+  let normalizedRows: Record<string, unknown>[] = []
+  try {
+    const normalizedData = await envioGraphqlRequest<{ AllocationSourceEvent: Record<string, unknown>[] }>(
+      `query KongAllocationNormalizedSupplement(
+        $chainId: Int!
+        $vaultAddress: String!
+        $toBlock: Int!
+        $eventNames: [String!]!
+        $pageSize: Int!
+      ) {
+        AllocationSourceEvent(
+          where: {
+            chainId: { _eq: $chainId }
+            vaultAddress: { _eq: $vaultAddress }
+            blockNumber: { _lte: $toBlock }
+            eventName: { _in: $eventNames }
+          }
+          order_by: [{ blockNumber: desc }, { transactionIndex: desc }, { logIndex: desc }, { id: desc }]
+          limit: $pageSize
+        ) {
+          chainId sourceAddress sourceType eventName signature blockNumber blockTimestamp
+          transactionHash transactionIndex logIndex topLevelTransactionFrom topLevelTransactionTo
+          topLevelInputSelector strategyAddress argsJson
+        }
+      }`,
+      {
+        chainId: input.chainId,
+        vaultAddress: input.vaultAddress.toLowerCase(),
+        toBlock: input.toBlock,
+        eventNames: NORMALIZED_SUPPLEMENT_EVENT_NAMES,
+        pageSize: EVENT_PAGE_SIZE
+      }
+    )
+    normalizedRows = normalizedData.AllocationSourceEvent
+  } catch {
+    normalizedSupplementAvailable = false
+  }
   const vaultSelections = VAULT_EVENTS.map((definition, index) =>
     eventSelection(`v${index}`, definition, 'chainId: { _eq: $chainId } vaultAddress: { _eq: $vaultAddress }')
   )
@@ -321,9 +410,15 @@ export async function fetchKongAllocationEvents(input: {
     { chainId: input.chainId, vaultAddress: input.vaultAddress, toBlock: input.toBlock, pageSize: EVENT_PAGE_SIZE }
   )
 
-  const events = VAULT_EVENTS.flatMap((definition, index) =>
+  const legacyEvents = VAULT_EVENTS.flatMap((definition, index) =>
     rows(vaultData, `v${index}`).map((row) => sourceEvent(definition, row))
   )
+  const eventsById = new Map(legacyEvents.map((event) => [event.id, event]))
+  for (const row of normalizedRows) {
+    const event = normalizedSourceEvent(row)
+    eventsById.set(event.id, event)
+  }
+  const events = [...eventsById.values()]
   const factoryRows = rows(vaultData, 'factory')
   events.push(...factoryRows.map((row) => sourceEvent(FACTORY_EVENT, row)))
 
@@ -333,6 +428,9 @@ export async function fetchKongAllocationEvents(input: {
   const truncatedEventFamilies = VAULT_EVENTS.filter(
     (_, index) => rows(vaultData, `v${index}`).length === EVENT_PAGE_SIZE
   ).map((definition) => definition.eventName)
+  if (normalizedRows.length === EVENT_PAGE_SIZE) {
+    truncatedEventFamilies.push('AllocationSourceEvent:supplement')
+  }
 
   if (allocatorAddresses.length > 0) {
     const allocatorSelections = ALLOCATOR_EVENTS.map((definition, index) =>
@@ -358,12 +456,13 @@ export async function fetchKongAllocationEvents(input: {
     }
   }
 
-  events.sort(
+  const uniqueEvents = [...new Map(events.map((event) => [event.id, event])).values()]
+  uniqueEvents.sort(
     (left, right) =>
       left.blockNumber - right.blockNumber ||
       left.transactionIndex - right.transactionIndex ||
       left.logIndex - right.logIndex ||
       left.id.localeCompare(right.id)
   )
-  return { events, truncatedEventFamilies }
+  return { events: uniqueEvents, truncatedEventFamilies, normalizedSupplementAvailable }
 }

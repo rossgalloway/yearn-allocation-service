@@ -2,11 +2,14 @@ import { knownDoaKeeper } from './known-actors'
 import type {
   ActorClassification,
   Address,
+  AllocationExecutionContext,
   AllocationSourceEvent,
   AllocationTransition,
   AllocationTransitionEffect,
   AllocationTransitionKind,
+  AllocatorTriggerReplay,
   Hash,
+  RpcTransactionContext,
   VaultActivity
 } from './types'
 
@@ -22,8 +25,15 @@ interface ActorState {
   allocatorKeepers: Set<Address>
   governance: Set<Address>
   roleManager: Address | null
-  vaultRoleHolders: Set<Address>
+  vaultRoles: Map<Address, bigint>
 }
+
+interface TransactionActorContext {
+  actor: ActorClassification
+  executionContext: AllocationExecutionContext
+}
+
+const DEBT_MANAGER_ROLE = 64n
 
 const CONFIG_EVENTS = new Set([
   'UpdatedMaxDebtForStrategy',
@@ -33,10 +43,13 @@ const CONFIG_EVENTS = new Set([
   'RoleStatusChanged',
   'UpdateRoleManager',
   'UpdateAccountant',
+  'UpdateDebtAllocator',
   'NewDebtAllocator',
   'UpdateKeeper',
   'GovernanceTransferred'
 ])
+
+const RATIO_EVENTS = new Set(['UpdateStrategyDebtRatio', 'UpdateStrategyDebtRatios'])
 
 function address(value: unknown): Address | null {
   return typeof value === 'string' && /^0x[a-fA-F0-9]{40}$/.test(value) ? (value.toLowerCase() as Address) : null
@@ -59,7 +72,8 @@ function classifyActor(actorAddress: Address | null, state: ActorState, chainId:
     return { address: actorAddress, role: 'debt_allocator_keeper', label: null }
   if (state.governance.has(actorAddress)) return { address: actorAddress, role: 'governance', label: null }
   if (state.roleManager === actorAddress) return { address: actorAddress, role: 'role_manager', label: null }
-  if (state.vaultRoleHolders.has(actorAddress)) return { address: actorAddress, role: 'vault_role_holder', label: null }
+  if ((state.vaultRoles.get(actorAddress) ?? 0n) !== 0n)
+    return { address: actorAddress, role: 'vault_role_holder', label: null }
   return { address: actorAddress, role: 'unknown', label: null }
 }
 
@@ -79,19 +93,23 @@ function applyActorEvent(event: AllocationSourceEvent, state: ActorState): void 
   } else if (event.eventName === 'RoleSet') {
     const account = address(event.args.account)
     if (!account) return
-    if (event.args.role === '0') state.vaultRoleHolders.delete(account)
-    else state.vaultRoleHolders.add(account)
+    const role = typeof event.args.role === 'string' && /^\d+$/.test(event.args.role) ? BigInt(event.args.role) : null
+    if (role !== null) state.vaultRoles.set(account, role)
   }
 }
 
-function actorByTransaction(events: readonly AllocationSourceEvent[], chainId: number): Map<Hash, ActorClassification> {
+function actorByTransaction(
+  events: readonly AllocationSourceEvent[],
+  chainId: number,
+  transactionContexts: ReadonlyMap<Hash, RpcTransactionContext>
+): Map<Hash, TransactionActorContext> {
   const state: ActorState = {
     allocatorKeepers: new Set(),
     governance: new Set(),
     roleManager: null,
-    vaultRoleHolders: new Set()
+    vaultRoles: new Map()
   }
-  const actors = new Map<Hash, ActorClassification>()
+  const actors = new Map<Hash, TransactionActorContext>()
   const sorted = [...events].sort(eventOrder)
   let index = 0
   while (index < sorted.length) {
@@ -108,7 +126,20 @@ function actorByTransaction(events: readonly AllocationSourceEvent[], chainId: n
       }
     }
     const actorAddress = transactionEvents.find((event) => event.transactionFrom)?.transactionFrom ?? null
-    actors.set(transactionHash, classifyActor(actorAddress, state, chainId))
+    const context = transactionContexts.get(transactionHash)
+    const immediateVaultCaller = context?.immediateVaultCaller ?? null
+    const roleMask = immediateVaultCaller ? state.vaultRoles.get(immediateVaultCaller) : undefined
+    actors.set(transactionHash, {
+      actor: classifyActor(actorAddress, state, chainId),
+      executionContext: {
+        traceStatus: context?.traceStatus ?? 'unavailable',
+        callPath: context?.callPath ?? [],
+        immediateVaultCaller,
+        immediateVaultCallerRoleMask: roleMask?.toString() ?? null,
+        immediateVaultCallerHasDebtManagerRole:
+          roleMask === undefined ? null : (roleMask & DEBT_MANAGER_ROLE) === DEBT_MANAGER_ROLE
+      }
+    })
     for (const event of transactionEvents) applyActorEvent(event, state)
   }
   return actors
@@ -116,16 +147,17 @@ function actorByTransaction(events: readonly AllocationSourceEvent[], chainId: n
 
 function effectKind(events: readonly AllocationSourceEvent[], actor: ActorClassification): AllocationTransitionKind {
   const names = new Set(events.map((event) => event.eventName))
+  const hasRatioEvent = [...names].some((name) => RATIO_EVENTS.has(name))
   if (names.has('DebtPurchased')) return 'bad_debt_purchase'
-  if (names.has('DebtUpdated') && names.has('Withdraw')) return 'withdrawal_driven_debt_update'
-  if (names.has('DebtUpdated') && names.has('Deposit')) return 'deposit_driven_debt_update'
-  if (names.has('DebtUpdated') && names.has('UpdateStrategyDebtRatios')) return 'allocator_execution'
+  if (names.has('DebtUpdated') && hasRatioEvent) return 'allocator_execution'
   if (names.has('DebtUpdated') && (actor.role === 'doa_keeper' || actor.role === 'debt_allocator_keeper'))
     return 'allocator_execution'
-  if (names.has('DebtUpdated')) return 'manual_debt_update'
-  if (names.has('UpdateStrategyDebtRatios')) return 'allocator_execution'
+  if (hasRatioEvent) return 'allocator_execution'
   if ([...names].some((name) => CONFIG_EVENTS.has(name))) return 'manual_config_change'
   if (names.has('StrategyChanged')) return 'strategy_lifecycle_change'
+  if (names.has('DebtUpdated') && names.has('Withdraw')) return 'withdrawal_driven_debt_update'
+  if (names.has('DebtUpdated') && names.has('Deposit')) return 'deposit_driven_debt_update'
+  if (names.has('DebtUpdated')) return 'manual_debt_update'
   if (names.has('StrategyReported')) return 'report_only_state_change'
   if (names.has('Withdraw')) return 'vault_withdrawal'
   if (names.has('Deposit')) return 'vault_deposit'
@@ -171,7 +203,8 @@ function vaultActivities(events: readonly AllocationSourceEvent[], transactionTo
 
 function transactionEffects(
   events: readonly AllocationSourceEvent[],
-  actors: ReadonlyMap<Hash, ActorClassification>
+  actors: ReadonlyMap<Hash, TransactionActorContext>,
+  triggerReplays: ReadonlyMap<Hash, AllocatorTriggerReplay[]>
 ): AllocationTransitionEffect[] {
   const byTransaction = new Map<Hash, AllocationSourceEvent[]>()
   for (const event of events) {
@@ -184,20 +217,31 @@ function transactionEffects(
     .map(([transactionHash, transactionEvents]) => {
       transactionEvents.sort(eventOrder)
       const first = transactionEvents[0]
-      const actor = actors.get(transactionHash) ?? {
-        address: first.transactionFrom,
-        role: 'unknown' as const,
-        label: null
+      const actorContext = actors.get(transactionHash) ?? {
+        actor: {
+          address: first.transactionFrom,
+          role: 'unknown' as const,
+          label: null
+        },
+        executionContext: {
+          traceStatus: 'unavailable' as const,
+          callPath: [],
+          immediateVaultCaller: null,
+          immediateVaultCallerRoleMask: null,
+          immediateVaultCallerHasDebtManagerRole: null
+        }
       }
       const activities = vaultActivities(transactionEvents, first.transactionTo)
       return {
-        kind: effectKind(transactionEvents, actor),
+        kind: effectKind(transactionEvents, actorContext.actor),
         sourceEventIds: transactionEvents.map((event) => event.id),
         transactionHash,
         transactionFrom: first.transactionFrom,
         transactionTo: first.transactionTo,
         inputSelector: first.inputSelector,
-        actor,
+        actor: actorContext.actor,
+        executionContext: actorContext.executionContext,
+        ...(triggerReplays.has(transactionHash) ? { triggerReplays: triggerReplays.get(transactionHash) } : {}),
         ...(activities.length > 0 ? { vaultActivities: activities } : {})
       }
     })
@@ -208,12 +252,14 @@ export function buildTransitions(input: {
   vaultAddress: Address
   points: readonly TransitionPoint[]
   events: readonly AllocationSourceEvent[]
+  transactionContexts?: ReadonlyMap<Hash, RpcTransactionContext>
+  triggerReplays?: ReadonlyMap<Hash, AllocatorTriggerReplay[]>
 }): AllocationTransition[] {
-  const actors = actorByTransaction(input.events, input.chainId)
+  const actors = actorByTransaction(input.events, input.chainId, input.transactionContexts ?? new Map())
   return input.points.map((point) => {
     const isLiveTail = point.currentLiveTail === true
     const blockEvents = input.events.filter((event) => event.blockNumber === point.blockNumber)
-    const effects = isLiveTail ? [] : transactionEffects(blockEvents, actors)
+    const effects = isLiveTail ? [] : transactionEffects(blockEvents, actors, input.triggerReplays ?? new Map())
     const transactionHashes = [...new Set(effects.map((effect) => effect.transactionHash))]
     return {
       id: `allocation-transition:${input.chainId}:${input.vaultAddress.toLowerCase()}:${point.blockNumber}`,

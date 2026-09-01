@@ -2,7 +2,7 @@ import { DoaConfigurationError, DoaUpstreamError } from '@/lib/doa/client'
 import { EnvioConfigurationError, EnvioUpstreamError } from '@/lib/envio/client'
 import { json, options } from '@/lib/http'
 import { ArchiveRpcConfigurationError, ArchiveRpcUpstreamError } from '@/lib/kong-allocation/rpc'
-import { getKongAllocationTimeline } from '@/lib/kong-allocation/service'
+import { getKongAllocationHistory } from '@/lib/kong-allocation/service'
 import type { TimelineDirection } from '@/lib/kong-allocation/types'
 import { findTestVault } from '@/lib/kong-allocation/vaults'
 
@@ -16,10 +16,6 @@ function parsePositiveInteger(value: string): number | null {
   if (!/^\d+$/.test(value)) return null
   const parsed = Number.parseInt(value, 10)
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null
-}
-
-function enabled(value: string | null): boolean {
-  return value === '1' || value === 'true'
 }
 
 function direction(value: string | null): TimelineDirection | null {
@@ -64,13 +60,12 @@ export async function GET(request: Request, context: { params: Promise<{ chainId
   if (selectedDirection === null) return json({ error: 'direction must be asc or desc' }, { status: 400 })
 
   try {
-    const timeline = await getKongAllocationTimeline({
+    const history = await getKongAllocationHistory({
       vault,
       limit: parsedLimit,
-      includeEvents: enabled(url.searchParams.get('events')),
       direction: selectedDirection
     })
-    return json(timeline, {
+    return json(history, {
       cacheControl: 'public, max-age=900, s-maxage=900, stale-while-revalidate=600'
     })
   } catch (error) {

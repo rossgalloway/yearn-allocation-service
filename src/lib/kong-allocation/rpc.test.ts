@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decodeAddress, decodeString, decodeUint, encodeAddressCall } from './rpc'
+import { decodeAddress, decodeString, decodeUint, encodeAddressCall, encodeAddressPairCall } from './rpc'
 import type { Address, Hash } from './types'
 
 describe('archive RPC ABI helpers', () => {
@@ -20,5 +20,14 @@ describe('archive RPC ABI helpers', () => {
   it('encodes address call arguments', () => {
     const address = '0x1234567890abcdef1234567890abcdef12345678' as Address
     expect(encodeAddressCall('0x12345678', address)).toBe(`0x12345678${address.slice(2).padStart(64, '0')}`)
+  })
+
+  it('encodes vault and strategy arguments for shared allocator calls', () => {
+    const vault = '0x1234567890abcdef1234567890abcdef12345678' as Address
+    const strategy = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as Address
+
+    expect(encodeAddressPairCall('0x12345678', vault, strategy)).toBe(
+      `0x12345678${vault.slice(2).padStart(64, '0')}${strategy.slice(2).padStart(64, '0')}`
+    )
   })
 })

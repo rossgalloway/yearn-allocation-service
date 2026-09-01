@@ -4,7 +4,10 @@ import { buildTransitions, type TransitionPoint } from './classify'
 import { processDoa } from './doa'
 import { fetchKongAllocationEvents, isAllocationTransitionEvent } from './envio'
 import { materializeStates, type StateBlock } from './materialize'
+import { buildRestAllocationHistory } from './rest'
 import {
+  type AllocatorTriggerReplayInput,
+  readAllocatorTriggerReplays,
   readBlockTimestamps,
   readContractNames,
   readLatestSafeBlock,
@@ -16,19 +19,23 @@ import type {
   AllocationHistoryStrategy,
   AllocationSourceEvent,
   AllocationState,
+  Hash,
+  NormalizedAllocationTimeline,
+  RpcTransactionContext,
   TimelineDirection,
-  VaultAllocationTimeline
+  VaultAllocationHistoryResponse
 } from './types'
 import type { TestVault } from './vaults'
 
 const CACHE_TTL_MS = 15 * 60 * 1000
+const REST_EVENT_SCAN_LIMIT = 100
 
-interface CachedTimeline {
+interface CachedHistory {
   expiresAt: number
-  value: Promise<VaultAllocationTimeline>
+  value: Promise<VaultAllocationHistoryResponse>
 }
 
-const timelineCache = new Map<string, CachedTimeline>()
+const historyCache = new Map<string, CachedHistory>()
 
 function stateId(chainId: number, vaultAddress: Address, blockNumber: number): string {
   return `allocation-state:${chainId}:${vaultAddress.toLowerCase()}:${blockNumber}`
@@ -47,7 +54,8 @@ export function eventBlocks(events: readonly AllocationSourceEvent[], limit?: nu
   const blocks = [...timestamps]
     .sort(([left], [right]) => left - right)
     .map(([blockNumber, blockTimestamp]) => ({ blockNumber, blockTimestamp }))
-  return limit === undefined ? blocks : blocks.slice(-limit)
+  if (limit === undefined) return blocks
+  return limit === 0 ? [] : blocks.slice(-limit)
 }
 
 async function pairedStateBlocks(
@@ -90,6 +98,81 @@ function hydrateTransactions(
       transactionTo: context.to,
       inputSelector: context.inputSelector
     }
+  })
+}
+
+interface AllocatorAssignment {
+  address: Address
+  blockNumber: number
+}
+
+function eventAddress(value: unknown): Address | null {
+  return typeof value === 'string' && /^0x[a-fA-F0-9]{40}$/.test(value) ? (value.toLowerCase() as Address) : null
+}
+
+function allocatorAssignments(events: readonly AllocationSourceEvent[]): AllocatorAssignment[] {
+  return events
+    .filter((event) => event.eventName === 'NewDebtAllocator' || event.eventName === 'UpdateDebtAllocator')
+    .flatMap((event): AllocatorAssignment[] => {
+      const allocator = eventAddress(
+        event.eventName === 'UpdateDebtAllocator' ? event.args.debtAllocator : event.args.allocator
+      )
+      return allocator ? [{ address: allocator, blockNumber: event.blockNumber }] : []
+    })
+    .sort((left, right) => left.blockNumber - right.blockNumber)
+}
+
+function allocatorAtTransaction(
+  assignments: readonly AllocatorAssignment[],
+  blockNumber: number,
+  context: RpcTransactionContext | undefined,
+  stateAllocator: Address | null
+): Address | null {
+  const eligible = assignments.filter((assignment) => assignment.blockNumber <= blockNumber)
+  const path = new Set([...(context?.callPath ?? []), context?.to].filter((value): value is Address => value != null))
+  if (stateAllocator && path.has(stateAllocator)) return stateAllocator
+  return [...eligible].reverse().find((assignment) => path.has(assignment.address))?.address ?? null
+}
+
+function triggerReplayInputs(
+  vaultAddress: Address,
+  selectedEvents: readonly AllocationSourceEvent[],
+  allEvents: readonly AllocationSourceEvent[],
+  contexts: ReadonlyMap<Hash, RpcTransactionContext>,
+  states: readonly AllocationState[],
+  assetDecimals: number | null
+): AllocatorTriggerReplayInput[] {
+  const assignments = allocatorAssignments(allEvents)
+  const stateAllocators = new Map(states.map((state) => [state.blockNumber, state.allocatorAddress]))
+  const seen = new Set<string>()
+  return selectedEvents.flatMap((event): AllocatorTriggerReplayInput[] => {
+    if (event.eventName !== 'DebtUpdated' || !event.strategyAddress) return []
+    const expectedDebt = typeof event.args.newDebt === 'string' ? event.args.newDebt : null
+    if (!expectedDebt || !/^\d+$/.test(expectedDebt)) return []
+    const allocatorAddress = allocatorAtTransaction(
+      assignments,
+      event.blockNumber,
+      contexts.get(event.transactionHash),
+      stateAllocators.get(event.blockNumber) ?? null
+    )
+    if (!allocatorAddress) return []
+    const key = `${event.transactionHash}:${event.strategyAddress}`
+    if (seen.has(key)) return []
+    seen.add(key)
+    const unitTolerance = assetDecimals === null ? 0n : 10n ** BigInt(Math.max(0, assetDecimals - 3))
+    const relativeTolerance = BigInt(expectedDebt) / 1_000_000_000n
+    const matchTolerance = (unitTolerance > relativeTolerance ? unitTolerance : relativeTolerance).toString()
+    return [
+      {
+        transactionHash: event.transactionHash,
+        allocatorAddress,
+        vaultAddress,
+        strategyAddress: event.strategyAddress,
+        blockNumber: event.blockNumber,
+        expectedDebt,
+        matchTolerance
+      }
+    ]
   })
 }
 
@@ -179,12 +262,11 @@ function selectedTransitionPoints(
   return points
 }
 
-async function loadTimeline(input: {
+async function loadHistory(input: {
   vault: TestVault
   limit: number
-  includeEvents: boolean
   direction: TimelineDirection
-}): Promise<VaultAllocationTimeline> {
+}): Promise<VaultAllocationHistoryResponse> {
   const generatedAt = Math.floor(Date.now() / 1000)
   const safeBlock = await readLatestSafeBlock(input.vault.chainId)
   const eventBatch = await fetchKongAllocationEvents({
@@ -192,13 +274,20 @@ async function loadTimeline(input: {
     vaultAddress: input.vault.address,
     toBlock: safeBlock.blockNumber
   })
-  const selectedEventBlocks = eventBlocks(eventBatch.events, input.limit)
+  const allEventBlocks = eventBlocks(eventBatch.events)
+  const safeBlockIsEvent = allEventBlocks.some((block) => block.blockNumber === safeBlock.blockNumber)
+  const selectedEventBlocks = eventBlocks(
+    eventBatch.events,
+    safeBlockIsEvent ? REST_EVENT_SCAN_LIMIT : REST_EVENT_SCAN_LIMIT - 1
+  )
+  const hasMore = allEventBlocks.length > selectedEventBlocks.length
   const blocks = await pairedStateBlocks(input.vault.chainId, selectedEventBlocks, safeBlock)
   const selectedBlockNumbers = new Set(blocks.map((block) => block.blockNumber))
   const selectedEvents = eventBatch.events.filter((event) => selectedBlockNumbers.has(event.blockNumber))
   const transactionContexts = await readTransactionContexts(
     input.vault.chainId,
-    selectedEvents.map((event) => event.transactionHash)
+    selectedEvents.map((event) => event.transactionHash),
+    input.vault.address
   )
   const hydratedEvents = hydrateTransactions(eventBatch.events, transactionContexts)
 
@@ -212,6 +301,17 @@ async function loadTimeline(input: {
     readVaultMetadata(input.vault.chainId, input.vault.address, safeBlock.blockNumber),
     readDoaOptimizations(input.vault.chainId)
   ])
+  const triggerReplays = await readAllocatorTriggerReplays(
+    input.vault.chainId,
+    triggerReplayInputs(
+      input.vault.address,
+      hydratedEvents.filter((event) => selectedBlockNumbers.has(event.blockNumber)),
+      hydratedEvents,
+      transactionContexts,
+      materialized.states,
+      vaultMetadata.assetDecimals
+    )
+  )
   const latestState = materialized.states.find((state) => state.blockNumber === safeBlock.blockNumber)
   if (!latestState) throw new Error('No allocation states were materialized')
   const names = await readContractNames(input.vault.chainId, materialized.strategyAddresses, safeBlock.blockNumber)
@@ -219,7 +319,9 @@ async function loadTimeline(input: {
     chainId: input.vault.chainId,
     vaultAddress: input.vault.address,
     points: selectedTransitionPoints(input.vault.chainId, input.vault.address, selectedEventBlocks, safeBlock),
-    events: hydratedEvents
+    events: hydratedEvents,
+    transactionContexts,
+    triggerReplays
   })
 
   const candidates = buildTransitions({
@@ -229,55 +331,60 @@ async function loadTimeline(input: {
     events: hydratedEvents
   })
   const selectedDoaRecords = selectVaultDoaOptimizations(doaRecords, input.vault.address, 500)
-  const doa = processDoa(selectedDoaRecords, candidates, hydratedEvents, generatedAt)
+  const doa = processDoa(selectedDoaRecords, candidates, hydratedEvents)
   const classifiedById = new Map(doa.transitions.map((transition) => [transition.id, transition]))
   const classifiedTransitions = baseTransitions.map((transition) => {
     const classified = classifiedById.get(transition.id)
-    return classified ? { ...classified, fromStateId: transition.fromStateId } : transition
+    if (!classified) return transition
+    const classifiedEffects = new Map(classified.effects.map((effect) => [effect.transactionHash, effect]))
+    return {
+      ...transition,
+      kind: classified.kind,
+      effects: transition.effects.map((effect) => ({
+        ...effect,
+        kind: classifiedEffects.get(effect.transactionHash)?.kind ?? effect.kind
+      })),
+      ...(classified.doa ? { doa: classified.doa } : {})
+    }
   })
 
-  return {
-    schemaVersion: 1,
+  const normalized: NormalizedAllocationTimeline = {
     generatedAt,
-    direction: input.direction,
     vault: vaultMetadata,
     strategies: buildStrategyDirectory(materialized.strategyAddresses, names, latestState),
-    states: orderByDirection(materialized.states, input.direction),
-    transitions: orderByDirection(classifiedTransitions, input.direction),
-    ...(doa.pendingDoaProposals.length > 0
-      ? { pendingDoaProposals: proposalOrder(doa.pendingDoaProposals, input.direction) }
-      : {}),
-    ...(input.includeEvents
-      ? {
-          events: orderByDirection(
-            hydratedEvents.filter((event) => selectedBlockNumbers.has(event.blockNumber)),
-            input.direction
-          )
-        }
-      : {})
+    states: materialized.states,
+    transitions: classifiedTransitions,
+    unappliedDoaProposals: proposalOrder(doa.unappliedDoaProposals, input.direction),
+    events: hydratedEvents.filter((event) => selectedBlockNumbers.has(event.blockNumber))
   }
+  return buildRestAllocationHistory({
+    timeline: normalized,
+    doaRecords: selectedDoaRecords,
+    direction: input.direction,
+    limit: input.limit,
+    hasMore
+  })
 }
 
-export async function getKongAllocationTimeline(input: {
+export async function getKongAllocationHistory(input: {
   vault: TestVault
   limit: number
-  includeEvents: boolean
   direction: TimelineDirection
-}): Promise<VaultAllocationTimeline> {
-  const key = `${input.vault.chainId}:${input.vault.address.toLowerCase()}:${input.limit}:${input.includeEvents}:${input.direction}`
-  const cached = timelineCache.get(key)
+}): Promise<VaultAllocationHistoryResponse> {
+  const key = `${input.vault.chainId}:${input.vault.address.toLowerCase()}:${input.limit}:${input.direction}`
+  const cached = historyCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value
 
-  const value = loadTimeline(input)
-  timelineCache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS })
+  const value = loadHistory(input)
+  historyCache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS })
   try {
     return await value
   } catch (error) {
-    timelineCache.delete(key)
+    historyCache.delete(key)
     throw error
   }
 }
 
-export function clearKongAllocationTimelineCache(): void {
-  timelineCache.clear()
+export function clearKongAllocationHistoryCache(): void {
+  historyCache.clear()
 }

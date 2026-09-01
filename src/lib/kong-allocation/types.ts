@@ -2,16 +2,27 @@ export type Address = `0x${string}`
 export type Hash = `0x${string}`
 export type TimelineDirection = 'asc' | 'desc'
 
-export interface VaultAllocationTimeline {
-  schemaVersion: 1
+export interface NormalizedAllocationTimeline {
   generatedAt: number
-  direction: TimelineDirection
   vault: VaultAllocationVault
   strategies: AllocationHistoryStrategy[]
   states: AllocationState[]
   transitions: AllocationTransition[]
-  pendingDoaProposals?: DoaProposal[]
+  unappliedDoaProposals: DoaProposal[]
   events?: AllocationSourceEvent[]
+}
+
+export interface VaultAllocationHistoryResponse {
+  schemaVersion: 2
+  generatedAt: number
+  direction: TimelineDirection
+  vault: VaultAllocationVault
+  entries: AllocationHistoryEntry[]
+  pagination: {
+    limit: number
+    returned: number
+    hasMore: boolean
+  }
 }
 
 export interface VaultAllocationVault {
@@ -40,6 +51,7 @@ export interface AllocationState {
   totalDebt: string
   totalIdle: string | null
   unallocatedBps: number
+  allocatorAddress: Address | null
   sourceEventIds: string[]
   strategies: AllocationStateStrategy[]
 }
@@ -52,6 +64,7 @@ export interface AllocationStateStrategy {
   maxDebtBps: number | null
   targetDebtRatioBps: number | null
   maxDebtRatioBps: number | null
+  allocatorAdded: boolean | null
   activation: number | null
   lastReport: number | null
 }
@@ -105,6 +118,8 @@ export interface AllocationTransitionEffect {
   transactionTo: Address | null
   inputSelector: Hash | null
   actor: ActorClassification
+  executionContext: AllocationExecutionContext
+  triggerReplays?: AllocatorTriggerReplay[]
   vaultActivities?: VaultActivity[]
 }
 
@@ -152,14 +167,185 @@ export interface DoaAnnotation {
     targetApr?: number | null
   }>
   matchReason: string
+  application: {
+    status: 'confirmed'
+    blockNumber: number
+    transactionHash: Hash
+    sourceEventIds: string[]
+  }
 }
 
-export interface DoaProposal extends DoaAnnotation {
-  status: 'pending' | 'unmatched' | 'stale'
+export interface DoaProposal extends Omit<DoaAnnotation, 'application'> {
+  status: 'unmatched' | 'superseded'
 }
 
 export interface RpcTransactionContext {
   from: Address | null
   to: Address | null
   inputSelector: Hash | null
+  traceStatus: 'available' | 'unavailable'
+  callPath: Address[]
+  immediateVaultCaller: Address | null
+}
+
+export interface AllocationExecutionContext {
+  traceStatus: RpcTransactionContext['traceStatus']
+  callPath: Address[]
+  immediateVaultCaller: Address | null
+  immediateVaultCallerRoleMask: string | null
+  immediateVaultCallerHasDebtManagerRole: boolean | null
+}
+
+export interface AllocatorTriggerReplay {
+  strategyAddress: Address
+  allocatorAddress: Address
+  readAtBlock: number
+  status: 'matched' | 'not_matched' | 'unavailable'
+  shouldUpdate: boolean | null
+  expectedDebt: string
+  recommendedDebt: string | null
+  absoluteDifference: string | null
+  matchTolerance: string
+  reason: string | null
+}
+
+export type AllocationHistoryEntryKind =
+  | 'current_snapshot'
+  | 'proposal_application'
+  | 'target_maintenance'
+  | 'allocator_override'
+  | 'manual_role_reallocation'
+  | 'unattributed_debt_update'
+  | 'deposit_driven_debt_update'
+  | 'withdrawal_driven_debt_update'
+  | 'configuration_change'
+  | 'strategy_lifecycle_change'
+  | 'bad_debt_purchase'
+  | 'unknown'
+
+export interface AllocationEntryStrategyState {
+  strategyAddress: Address
+  strategyName: string | null
+  active: boolean | null
+  currentDebt: string
+  currentDebtBps: number
+  maxDebt: string | null
+  maxDebtBps: number | null
+  targetDebtRatioBps: number | null
+  maxDebtRatioBps: number | null
+  allocatorAdded: boolean | null
+}
+
+export interface AllocationEntryState {
+  blockNumber: number
+  blockTimestamp: number
+  source: 'archive_rpc'
+  totalAssets: string
+  totalDebt: string
+  totalIdle: string | null
+  unallocatedBps: number
+  allocatorAddress: Address | null
+  allocations: AllocationEntryStrategyState[]
+  accountingChecks: {
+    totalAssetsEqualsDebtPlusIdle: boolean | null
+    strategyDebtSumEqualsTotalDebt: boolean
+  }
+}
+
+export interface AllocationEntryStrategyChange {
+  strategyAddress: Address
+  strategyName: string | null
+  currentDebtBefore: string | null
+  currentDebtAfter: string | null
+  currentDebtDelta: string | null
+  currentDebtBpsBefore: number | null
+  currentDebtBpsAfter: number | null
+  currentDebtBpsDelta: number | null
+  targetDebtRatioBpsBefore: number | null
+  targetDebtRatioBpsAfter: number | null
+  maxDebtRatioBpsBefore: number | null
+  maxDebtRatioBpsAfter: number | null
+  activeBefore: boolean | null
+  activeAfter: boolean | null
+}
+
+export interface AllocationEntryPolicy {
+  id: string
+  source: 'doa'
+  proposal: {
+    sourceKey: string
+    publishedAt: number
+    optimizerCurrentApr: number | null
+    optimizerProposedApr: number | null
+    explain: string | null
+  }
+  application:
+    | {
+        status: 'confirmed'
+        blockNumber: number
+        transactionHash: Hash
+        sourceEventIds: string[]
+      }
+    | {
+        status: 'inferred_from_historical_config'
+        blockNumber: null
+        transactionHash: null
+        sourceEventIds: []
+      }
+  targets: Array<{
+    strategyAddress: Address
+    strategyName: string | null
+    currentRatioBps: number | null
+    targetRatioBps: number | null
+    maxRatioBps: number | null
+    currentApr?: number | null
+    targetApr?: number | null
+  }>
+}
+
+export interface AllocationEntryTransaction {
+  transactionHash: Hash
+  blockNumber: number
+  blockTimestamp: number
+  kind: AllocationTransitionKind
+  originator: ActorClassification
+  transactionTarget: Address | null
+  inputSelector: Hash | null
+  callPath: Address[]
+  traceStatus: RpcTransactionContext['traceStatus']
+  immediateVaultCaller: Address | null
+  authorization: {
+    role: 'DEBT_MANAGER'
+    roleMask: string | null
+    confirmedAtBlock: boolean | null
+  }
+  sourceEventIds: string[]
+  triggerReplays: AllocatorTriggerReplay[]
+  vaultActivities?: VaultActivity[]
+}
+
+export interface AllocationHistoryEntry {
+  id: string
+  kind: AllocationHistoryEntryKind
+  startBlock: number
+  endBlock: number
+  startTimestamp: number
+  endTimestamp: number
+  before: AllocationEntryState | null
+  after: AllocationEntryState
+  changes: {
+    totalDebtDelta: string | null
+    totalIdleDelta: string | null
+    strategies: AllocationEntryStrategyChange[]
+  }
+  policy: AllocationEntryPolicy | null
+  execution: {
+    transactions: AllocationEntryTransaction[]
+  }
+  classification: {
+    confidence: 'high' | 'medium' | 'low'
+    evidence: string[]
+    limitations: string[]
+  }
+  detailsAvailable: boolean
 }

@@ -83,7 +83,14 @@ function transition(eventIds: string[], overrides: Partial<AllocationTransition>
         transactionFrom: null,
         transactionTo: null,
         inputSelector: null,
-        actor: { address: null, role: 'unknown', label: null }
+        actor: { address: null, role: 'unknown', label: null },
+        executionContext: {
+          traceStatus: 'unavailable',
+          callPath: [],
+          immediateVaultCaller: null,
+          immediateVaultCallerRoleMask: null,
+          immediateVaultCallerHasDebtManagerRole: null
+        }
       }
     ],
     ...overrides
@@ -91,17 +98,23 @@ function transition(eventIds: string[], overrides: Partial<AllocationTransition>
 }
 
 describe('processDoa', () => {
-  it('upgrades a debt transition when allocator targets match a proposal', () => {
+  it('records a policy application only when allocator targets exactly match a proposal', () => {
     const debt = sourceEvent('1:tx:0', 'DebtUpdated', { currentDebt: '100', newDebt: '200' })
     const ratio = sourceEvent('1:tx:1', 'UpdateStrategyDebtRatios', { newTargetRatio: '2000' })
-    const result = processDoa([record(10_000)], [transition([debt.id, ratio.id])], [debt, ratio], 10_200)
+    const result = processDoa([record(10_000)], [transition([debt.id, ratio.id])], [debt, ratio])
 
-    expect(result.transitions[0].kind).toBe('doa_execution')
+    expect(result.transitions[0].kind).toBe('allocator_execution')
     expect(result.transitions[0].doa?.strategyTargets[0].targetRatioBps).toBe(2000)
-    expect(result.pendingDoaProposals).toEqual([])
+    expect(result.transitions[0].doa?.application).toEqual({
+      status: 'confirmed',
+      blockNumber: 100,
+      transactionHash,
+      sourceEventIds: [ratio.id]
+    })
+    expect(result.unappliedDoaProposals).toEqual([])
   })
 
-  it('matches every keeper debt step explained by one proposal without allocator-ratio events', () => {
+  it('does not treat keeper direction and timing as policy-application proof', () => {
     const firstDebt = sourceEvent(
       '1:tx:0',
       'DebtUpdated',
@@ -133,43 +146,45 @@ describe('processDoa', () => {
           transactionFrom: mainnetDoaKeeper,
           transactionTo: null,
           inputSelector: null,
-          actor: { address: mainnetDoaKeeper, role: 'doa_keeper', label: 'Yearn TKS DOA keeper' }
+          actor: { address: mainnetDoaKeeper, role: 'doa_keeper', label: 'Yearn TKS DOA keeper' },
+          executionContext: {
+            traceStatus: 'unavailable',
+            callPath: [],
+            immediateVaultCaller: null,
+            immediateVaultCallerRoleMask: null,
+            immediateVaultCallerHasDebtManagerRole: null
+          }
         }
       ]
     })
 
-    const result = processDoa([record(10_000)], [firstTransition, secondTransition], [firstDebt, secondDebt], 10_300)
+    const result = processDoa([record(10_000)], [firstTransition, secondTransition], [firstDebt, secondDebt])
 
-    expect(result.transitions.map((item) => item.kind)).toEqual(['doa_execution', 'doa_execution'])
-    expect(result.transitions.map((item) => item.doa?.sourceKey)).toEqual([
-      'doa:optimizations:1:10000',
-      'doa:optimizations:1:10000'
-    ])
-    expect(result.pendingDoaProposals).toEqual([])
+    expect(result.transitions.map((item) => item.kind)).toEqual(['allocator_execution', 'allocator_execution'])
+    expect(result.transitions.every((item) => item.doa === undefined)).toBe(true)
+    expect(result.unappliedDoaProposals[0].status).toBe('unmatched')
   })
 
   it('does not match debt direction and timing without a trusted execution path', () => {
     const debt = sourceEvent('1:tx:0', 'DebtUpdated', { currentDebt: '100', newDebt: '200' })
-    const result = processDoa([record(10_000)], [transition([debt.id])], [debt], 10_200)
+    const result = processDoa([record(10_000)], [transition([debt.id])], [debt])
 
     expect(result.transitions[0].kind).toBe('allocator_execution')
     expect(result.transitions[0].doa).toBeUndefined()
-    expect(result.pendingDoaProposals[0].status).toBe('pending')
+    expect(result.unappliedDoaProposals[0].status).toBe('unmatched')
   })
 
-  it('ages unmatched proposals without creating executed transitions', () => {
+  it('does not age unmatched proposals into a synthetic stale status', () => {
     const proposal = record(10_000)
-    const result = processDoa([proposal], [], [], 10_000 + 31 * 24 * 3600)
+    const result = processDoa([proposal], [], [])
 
     expect(result.transitions).toEqual([])
-    expect(result.pendingDoaProposals[0].status).toBe('stale')
+    expect(result.unappliedDoaProposals[0].status).toBe('unmatched')
   })
 
-  it('distinguishes pending, unmatched, and stale proposal ages', () => {
-    const proposal = record(10_000)
+  it('marks an unapplied proposal as superseded only when a newer template replaces it', () => {
+    const result = processDoa([record(10_000), record(20_000)], [], [])
 
-    expect(processDoa([proposal], [], [], 10_000 + 48 * 3600).pendingDoaProposals[0].status).toBe('pending')
-    expect(processDoa([proposal], [], [], 10_000 + 4 * 24 * 3600).pendingDoaProposals[0].status).toBe('unmatched')
-    expect(processDoa([proposal], [], [], 10_000 + 31 * 24 * 3600).pendingDoaProposals[0].status).toBe('stale')
+    expect(result.unappliedDoaProposals.map((proposal) => proposal.status)).toEqual(['superseded', 'unmatched'])
   })
 })
