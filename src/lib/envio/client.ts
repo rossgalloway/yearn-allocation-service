@@ -50,7 +50,7 @@ function graphqlUrl(): string {
   return value
 }
 
-async function graphqlRequest<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+export async function envioGraphqlRequest<T>(query: string, variables: Record<string, unknown>): Promise<T> {
   const url = graphqlUrl()
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -140,7 +140,7 @@ export async function fetchAllocationCoverage(input: {
       }
     }
   `
-  const data = await graphqlRequest<{ VaultAllocationCoverage: RawCoverage[] }>(query, {
+  const data = await envioGraphqlRequest<{ VaultAllocationCoverage: RawCoverage[] }>(query, {
     chainId: input.chainId,
     vaultAddress: input.vaultAddress,
     ...(revision ? { coverageRevision: revision } : {})
@@ -207,7 +207,7 @@ async function fetchEventPage(input: {
       ) { ${EVENT_FIELDS} }
     }
   `
-  const data = await graphqlRequest<{ AllocationSourceEvent: AllocationSourceEvent[] }>(query, {
+  const data = await envioGraphqlRequest<{ AllocationSourceEvent: AllocationSourceEvent[] }>(query, {
     chainId: input.chainId,
     vaultAddress: input.vaultAddress,
     fromBlock: input.fromBlock,
@@ -268,7 +268,7 @@ export async function fetchAccountingCheckpoints(input: {
         ) { ${CHECKPOINT_FIELDS} }
       }
     `
-    const data = await graphqlRequest<{ VaultAccountingCheckpoint: VaultAccountingCheckpoint[] }>(query, {
+    const data = await envioGraphqlRequest<{ VaultAccountingCheckpoint: VaultAccountingCheckpoint[] }>(query, {
       chainId: input.chainId,
       vaultAddress: input.vaultAddress,
       afterBlock,
@@ -307,7 +307,7 @@ export async function fetchUnresolvedCheckpointFailures(input: {
       ) { id blockNumber expectedBlockHash reason sourceEventIds }
     }
   `
-  const data = await graphqlRequest<{
+  const data = await envioGraphqlRequest<{
     VaultAccountingCheckpointFailure: VaultAccountingCheckpointFailure[]
   }>(query, {
     chainId: input.chainId,

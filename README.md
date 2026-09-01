@@ -14,6 +14,8 @@ The initial state and coverage semantics are informed by `yearn.fi` branch `code
   `unallocatedBps`.
 
 See [docs/data-contract.md](./docs/data-contract.md) for processing and failure semantics.
+Prototype decisions that differ from the Kong reference are tracked in
+[docs/reference-spec-deltas.md](./docs/reference-spec-deltas.md).
 
 ## Endpoints
 
@@ -58,6 +60,32 @@ endpoint. Each record's `allocationSnapshot` is the canonical current-allocation
 
 Returns liveness and booleans for required upstream configuration. It never returns URLs or tokens.
 
+### `GET /api/rest/views/allocation-history/:chainId/:address` (test)
+
+Returns the `VaultAllocationTimeline` shape proposed for Kong. This prototype reads only raw event tables from Envio and
+materializes block-end state through the configured archive RPC. It is intentionally limited to Ethereum and these vaults:
+
+- `yvUSDC-1`: `0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204`
+- `yvUSDT-1`: `0x310B7Ea7475A0B449Cfd73bE81522F1B88eFAFaa`
+- `yvUSD`: `0x696d02Db93291651ED510704c9b286841d506987`
+
+The route defaults to the latest 25 event transitions plus a confirmed live tail. For every transition at block `N`, `states`
+contains an immediate pre-state read at `N - 1` and a post-state read at `N`; the transition links them through `fromStateId`
+and `toStateId`. Adjacent duplicate state blocks are returned once.
+
+Responses default to `direction=desc` (newest first). Pass `direction=asc` for chronological order. `limit` accepts 1–100
+historical event transitions, and `events=1` includes raw events for the returned state blocks. The response echoes its
+`direction` and uses the Kong cache headers from the spec.
+
+Envio `Deposit` and `Withdraw` rows enrich effects without creating standalone allocation samples. Associated strategy debt
+changes use `kind: "deposit_driven_debt_update"` or `kind: "withdrawal_driven_debt_update"` and expose `vaultActivities`
+with assets, shares, participants, and whether the transaction called the vault directly or through a router/Safe. Known
+keeper debt changes without a matching proposal are `allocator_execution`, not manual updates.
+
+This is a shape-validation endpoint, not the production refresh pipeline: it computes on demand, keeps a 15-minute in-memory
+cache, and reads at most the latest 1,000 rows from each Envio event family. The documented Ethereum TKS DOA keeper is labeled
+directly; other actors are derived from allocator/vault role events when available and remain `unknown` otherwise.
+
 ## Local development
 
 ```bash
@@ -83,6 +111,7 @@ The repository follows the same Yearn Vercel deployment pattern as `katana-apr-s
 - `ENVIO_ALLOCATION_GRAPHQL_URL`
 - `ENVIO_ALLOCATION_GRAPHQL_TOKEN` when the candidate deployment is authenticated
 - `ENVIO_ALLOCATION_COVERAGE_REVISION`
+- `RPC_URL_1`
 - `UPSTASH_REDIS_REST_URL`
 - `UPSTASH_REDIS_REST_TOKEN`
 
