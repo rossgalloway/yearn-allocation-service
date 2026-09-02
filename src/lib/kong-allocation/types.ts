@@ -16,12 +16,17 @@ export interface VaultAllocationHistoryResponse {
   schemaVersion: 2
   generatedAt: number
   direction: TimelineDirection
+  dataQuality: {
+    certification: 'certified' | 'provisional'
+    limitations: string[]
+  }
   vault: VaultAllocationVault
   entries: AllocationHistoryEntry[]
   pagination: {
     limit: number
     returned: number
     hasMore: boolean
+    nextCursor: string | null
   }
 }
 
@@ -50,7 +55,9 @@ export interface AllocationState {
   totalAssets: string
   totalDebt: string
   totalIdle: string | null
-  unallocatedBps: number
+  unallocatedBps: number | null
+  unallocatedSource: 'envio_same_block_checkpoint' | null
+  unallocatedCheckpointId: string | null
   allocatorAddress: Address | null
   sourceEventIds: string[]
   strategies: AllocationStateStrategy[]
@@ -211,13 +218,11 @@ export interface AllocatorTriggerReplay {
 
 export type AllocationHistoryEntryKind =
   | 'current_snapshot'
-  | 'proposal_application'
-  | 'target_maintenance'
-  | 'allocator_override'
-  | 'manual_role_reallocation'
+  | 'policy_application'
+  | 'idle_deployment'
+  | 'strategy_reallocation'
+  | 'idle_deallocation'
   | 'unattributed_debt_update'
-  | 'deposit_driven_debt_update'
-  | 'withdrawal_driven_debt_update'
   | 'configuration_change'
   | 'strategy_lifecycle_change'
   | 'bad_debt_purchase'
@@ -243,7 +248,9 @@ export interface AllocationEntryState {
   totalAssets: string
   totalDebt: string
   totalIdle: string | null
-  unallocatedBps: number
+  unallocatedBps: number | null
+  unallocatedSource: 'envio_same_block_checkpoint' | null
+  unallocatedCheckpointId: string | null
   allocatorAddress: Address | null
   allocations: AllocationEntryStrategyState[]
   accountingChecks: {
@@ -258,6 +265,9 @@ export interface AllocationEntryStrategyChange {
   currentDebtBefore: string | null
   currentDebtAfter: string | null
   currentDebtDelta: string | null
+  maxDebtBefore: string | null
+  maxDebtAfter: string | null
+  maxDebtDelta: string | null
   currentDebtBpsBefore: number | null
   currentDebtBpsAfter: number | null
   currentDebtBpsDelta: number | null
@@ -324,6 +334,30 @@ export interface AllocationEntryTransaction {
   vaultActivities?: VaultActivity[]
 }
 
+export type AllocationEntryOperationValue = string | number | boolean | string[] | null
+
+export interface AllocationEntryOperation {
+  kind:
+    | 'strategy_added'
+    | 'strategy_retired'
+    | 'max_debt_updated'
+    | 'allocator_strategy_configured'
+    | 'vault_configuration_updated'
+  source: 'envio_event' | 'archive_rpc_diff'
+  sourceEventIds: string[]
+  eventName: string | null
+  subject: {
+    type: 'strategy' | 'vault' | 'account' | 'allocator'
+    address: Address | null
+    name: string | null
+  }
+  changes: Array<{
+    field: string
+    before: AllocationEntryOperationValue
+    after: AllocationEntryOperationValue
+  }>
+}
+
 export interface AllocationHistoryEntry {
   id: string
   kind: AllocationHistoryEntryKind
@@ -339,7 +373,19 @@ export interface AllocationHistoryEntry {
     strategies: AllocationEntryStrategyChange[]
   }
   policy: AllocationEntryPolicy | null
+  operations: AllocationEntryOperation[]
   execution: {
+    automation: 'automatic' | 'manual' | 'mixed' | 'unknown' | null
+    mechanism:
+      | 'allocator_keeper'
+      | 'direct_vault_role'
+      | 'governance_safe'
+      | 'governance'
+      | 'role_manager'
+      | 'mixed'
+      | 'unknown'
+      | null
+    targetStatus: 'matched' | 'overridden' | 'unavailable' | 'not_applicable' | 'mixed' | null
     transactions: AllocationEntryTransaction[]
   }
   classification: {

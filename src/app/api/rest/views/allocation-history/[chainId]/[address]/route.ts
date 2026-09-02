@@ -1,6 +1,10 @@
+import { AllocationCoverageError } from '@/lib/allocation/service'
+import { DatabaseConfigurationError, DatabaseUpstreamError } from '@/lib/database/client'
 import { DoaConfigurationError, DoaUpstreamError } from '@/lib/doa/client'
 import { EnvioConfigurationError, EnvioUpstreamError } from '@/lib/envio/client'
 import { json, options } from '@/lib/http'
+import { AllocationHistoryCursorError } from '@/lib/kong-allocation/cursor'
+import { AllocationHistoryNotMaterializedError } from '@/lib/kong-allocation/repository'
 import { ArchiveRpcConfigurationError, ArchiveRpcUpstreamError } from '@/lib/kong-allocation/rpc'
 import { getKongAllocationHistory } from '@/lib/kong-allocation/service'
 import type { TimelineDirection } from '@/lib/kong-allocation/types'
@@ -24,10 +28,14 @@ function direction(value: string | null): TimelineDirection | null {
 }
 
 function upstreamFailure(error: unknown): { status: number; message: string } {
+  if (error instanceof AllocationHistoryCursorError) return { status: 400, message: error.message }
   if (
     error instanceof EnvioConfigurationError ||
     error instanceof ArchiveRpcConfigurationError ||
-    error instanceof DoaConfigurationError
+    error instanceof DoaConfigurationError ||
+    error instanceof DatabaseConfigurationError ||
+    error instanceof AllocationHistoryNotMaterializedError ||
+    error instanceof AllocationCoverageError
   ) {
     return { status: 503, message: error.message }
   }
@@ -38,6 +46,7 @@ function upstreamFailure(error: unknown): { status: number; message: string } {
   ) {
     return { status: 502, message: error.message }
   }
+  if (error instanceof DatabaseUpstreamError) return { status: 503, message: error.message }
   return { status: 500, message: error instanceof Error ? error.message : 'Allocation history generation failed' }
 }
 
@@ -58,15 +67,23 @@ export async function GET(request: Request, context: { params: Promise<{ chainId
   }
   const selectedDirection = direction(url.searchParams.get('direction'))
   if (selectedDirection === null) return json({ error: 'direction must be asc or desc' }, { status: 400 })
+  const cursor = url.searchParams.get('cursor')
+  if (cursor !== null && (cursor.length === 0 || cursor.length > 2_048)) {
+    return json({ error: 'cursor is invalid' }, { status: 400 })
+  }
 
   try {
     const history = await getKongAllocationHistory({
       vault,
       limit: parsedLimit,
-      direction: selectedDirection
+      direction: selectedDirection,
+      cursor
     })
     return json(history, {
-      cacheControl: 'public, max-age=900, s-maxage=900, stale-while-revalidate=600'
+      cacheControl:
+        history.dataQuality.certification === 'provisional'
+          ? 'no-store'
+          : 'public, max-age=900, s-maxage=900, stale-while-revalidate=600'
     })
   } catch (error) {
     const failure = upstreamFailure(error)

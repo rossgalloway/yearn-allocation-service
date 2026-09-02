@@ -7,6 +7,7 @@ import type {
 
 const EVENT_PAGE_SIZE = 1000
 const CHECKPOINT_PAGE_SIZE = 1000
+const FAILURE_PAGE_SIZE = 1000
 const REQUEST_TIMEOUT_MS = 15_000
 
 const EVENT_FIELDS = `
@@ -250,20 +251,29 @@ export async function fetchAccountingCheckpoints(input: {
   toBlock: number
 }): Promise<VaultAccountingCheckpoint[]> {
   const checkpoints: VaultAccountingCheckpoint[] = []
-  let afterBlock = input.fromBlock - 1
+  let cursor: { blockNumber: number; id: string } | undefined
 
   while (true) {
+    const continuation = cursor
+      ? `_or: [
+          { blockNumber: { _gt: $cursorBlock } }
+          { blockNumber: { _eq: $cursorBlock }, id: { _gt: $cursorId } }
+        ]`
+      : ''
+    const cursorVariables = cursor ? '$cursorBlock: Int! $cursorId: String!' : ''
     const query = `
       query AccountingCheckpointPage(
-        $chainId: Int! $vaultAddress: String! $afterBlock: Int! $toBlock: Int! $limit: Int!
+        $chainId: Int! $vaultAddress: String! $fromBlock: Int! $toBlock: Int! $limit: Int!
+        ${cursorVariables}
       ) {
         VaultAccountingCheckpoint(
           where: {
             chainId: { _eq: $chainId }
             vaultAddress: { _eq: $vaultAddress }
-            blockNumber: { _gt: $afterBlock, _lte: $toBlock }
+            blockNumber: { _gte: $fromBlock, _lte: $toBlock }
+            ${continuation}
           }
-          order_by: [{ blockNumber: asc }]
+          order_by: [{ blockNumber: asc }, { id: asc }]
           limit: $limit
         ) { ${CHECKPOINT_FIELDS} }
       }
@@ -271,9 +281,10 @@ export async function fetchAccountingCheckpoints(input: {
     const data = await envioGraphqlRequest<{ VaultAccountingCheckpoint: VaultAccountingCheckpoint[] }>(query, {
       chainId: input.chainId,
       vaultAddress: input.vaultAddress,
-      afterBlock,
+      fromBlock: input.fromBlock,
       toBlock: input.toBlock,
-      limit: CHECKPOINT_PAGE_SIZE
+      limit: CHECKPOINT_PAGE_SIZE,
+      ...(cursor ? { cursorBlock: cursor.blockNumber, cursorId: cursor.id } : {})
     })
     const page = data.VaultAccountingCheckpoint
     if (page.length === 0) break
@@ -281,7 +292,11 @@ export async function fetchAccountingCheckpoints(input: {
     if (page.length < CHECKPOINT_PAGE_SIZE) break
     const lastCheckpoint = page.at(-1)
     if (!lastCheckpoint) break
-    afterBlock = lastCheckpoint.blockNumber
+    const next = { blockNumber: lastCheckpoint.blockNumber, id: lastCheckpoint.id }
+    if (cursor && next.blockNumber === cursor.blockNumber && next.id === cursor.id) {
+      throw new EnvioUpstreamError('Envio accounting checkpoint pagination did not advance')
+    }
+    cursor = next
   }
   return checkpoints
 }
@@ -292,28 +307,54 @@ export async function fetchUnresolvedCheckpointFailures(input: {
   fromBlock: number
   toBlock: number
 }): Promise<VaultAccountingCheckpointFailure[]> {
-  const query = `
-    query UnresolvedCheckpointFailures(
-      $chainId: Int! $vaultAddress: String! $fromBlock: Int! $toBlock: Int!
-    ) {
-      VaultAccountingCheckpointFailure(
-        where: {
-          chainId: { _eq: $chainId }
-          vaultAddress: { _eq: $vaultAddress }
-          blockNumber: { _gte: $fromBlock, _lte: $toBlock }
-          resolved: { _eq: false }
-        }
-        order_by: [{ blockNumber: asc }]
-      ) { id blockNumber expectedBlockHash reason sourceEventIds }
+  const failures: VaultAccountingCheckpointFailure[] = []
+  let cursor: { blockNumber: number; id: string } | undefined
+  while (true) {
+    const continuation = cursor
+      ? `_or: [
+          { blockNumber: { _gt: $cursorBlock } }
+          { blockNumber: { _eq: $cursorBlock }, id: { _gt: $cursorId } }
+        ]`
+      : ''
+    const cursorVariables = cursor ? '$cursorBlock: Int! $cursorId: String!' : ''
+    const query = `
+      query UnresolvedCheckpointFailurePage(
+        $chainId: Int! $vaultAddress: String! $fromBlock: Int! $toBlock: Int! $limit: Int!
+        ${cursorVariables}
+      ) {
+        VaultAccountingCheckpointFailure(
+          where: {
+            chainId: { _eq: $chainId }
+            vaultAddress: { _eq: $vaultAddress }
+            blockNumber: { _gte: $fromBlock, _lte: $toBlock }
+            resolved: { _eq: false }
+            ${continuation}
+          }
+          order_by: [{ blockNumber: asc }, { id: asc }]
+          limit: $limit
+        ) { id blockNumber expectedBlockHash reason sourceEventIds }
+      }
+    `
+    const data = await envioGraphqlRequest<{
+      VaultAccountingCheckpointFailure: VaultAccountingCheckpointFailure[]
+    }>(query, {
+      chainId: input.chainId,
+      vaultAddress: input.vaultAddress,
+      fromBlock: input.fromBlock,
+      toBlock: input.toBlock,
+      limit: FAILURE_PAGE_SIZE,
+      ...(cursor ? { cursorBlock: cursor.blockNumber, cursorId: cursor.id } : {})
+    })
+    const page = data.VaultAccountingCheckpointFailure
+    failures.push(...page)
+    if (page.length < FAILURE_PAGE_SIZE) break
+    const lastFailure = page.at(-1)
+    if (!lastFailure) break
+    const next = { blockNumber: lastFailure.blockNumber, id: lastFailure.id }
+    if (cursor && next.blockNumber === cursor.blockNumber && next.id === cursor.id) {
+      throw new EnvioUpstreamError('Envio checkpoint failure pagination did not advance')
     }
-  `
-  const data = await envioGraphqlRequest<{
-    VaultAccountingCheckpointFailure: VaultAccountingCheckpointFailure[]
-  }>(query, {
-    chainId: input.chainId,
-    vaultAddress: input.vaultAddress,
-    fromBlock: input.fromBlock,
-    toBlock: input.toBlock
-  })
-  return data.VaultAccountingCheckpointFailure
+    cursor = next
+  }
+  return failures
 }

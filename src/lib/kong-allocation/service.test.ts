@@ -17,6 +17,8 @@ function latestState(): AllocationState {
     totalDebt: '100',
     totalIdle: '0',
     unallocatedBps: 0,
+    unallocatedSource: 'envio_same_block_checkpoint',
+    unallocatedCheckpointId: 'checkpoint:100',
     allocatorAddress: null,
     sourceEventIds: [],
     strategies: [

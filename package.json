@@ -7,19 +7,27 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose stop postgres",
+    "db:migrate": "bun run scripts/db-migrate.ts",
+    "allocation:backfill": "bun run scripts/allocation-materialize.ts --mode=backfill",
+    "allocation:refresh": "bun run scripts/allocation-materialize.ts --mode=refresh",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test": "vitest run",
+    "test:db": "vitest run src/lib/kong-allocation/repository.integration.test.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
     "next": "16.2.6",
+    "pg": "8.23.0",
     "react": "19.2.6",
     "react-dom": "19.2.6"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",
     "@types/node": "25.3.0",
+    "@types/pg": "8.18.0",
     "@types/react": "19.2.15",
     "@types/react-dom": "19.2.3",
     "typescript": "5.9.3",

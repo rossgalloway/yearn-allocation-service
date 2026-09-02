@@ -7,7 +7,12 @@ const endpoints = [
   {
     method: 'GET',
     path: '/api/health',
-    description: 'Liveness and non-secret upstream configuration status.'
+    description: 'Serving readiness, database reachability, certification, and refresh status.'
+  },
+  {
+    method: 'GET',
+    path: '/api/rest/views/allocation-history/1/0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204',
+    description: 'Cursor-paginated, chart-ready allocation entries from the active Postgres materialization.'
   }
 ]
 
@@ -18,23 +23,23 @@ export default function Home() {
         <p className="eyebrow">YEARn DATA INFRASTRUCTURE</p>
         <h1>Allocation history, with its evidence attached.</h1>
         <p className="lede">
-          A small Next.js service that keeps optimizer intent and executed vault state distinct, then serves both to
-          consumers such as Kong and Powerglove.
+          A small Next.js service that keeps optimizer intent and executed vault state distinct, materializes
+          chart-ready allocation entries, then serves them to consumers such as Kong and Powerglove.
         </p>
       </header>
 
       <section className="status" aria-label="Contract summary">
         <div>
-          <span>EXECUTED STATE</span>
-          <strong>Envio</strong>
+          <span>EXECUTION EVIDENCE</span>
+          <strong>Envio + RPC</strong>
         </div>
         <div>
-          <span>OPTIMIZER INTENT</span>
+          <span>REST READ MODEL</span>
+          <strong>Postgres</strong>
+        </div>
+        <div>
+          <span>OPTIONAL POLICY</span>
           <strong>DOA</strong>
-        </div>
-        <div>
-          <span>ENRICHMENT</span>
-          <strong>Timestamp-aligned</strong>
         </div>
       </section>
 

@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: yearn_allocation
+      POSTGRES_USER: yearn
+      POSTGRES_PASSWORD: yearn
+    ports:
+      - '127.0.0.1:55434:5432'
+    volumes:
+      - yearn-allocation-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U yearn -d yearn_allocation']
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  yearn-allocation-postgres-data:

@@ -1,10 +1,25 @@
-import { readDoaOptimizations } from '@/lib/doa/client'
+import { AllocationCoverageError, allocationCoverageContractIssues } from '@/lib/allocation/service'
+import { DatabaseConfigurationError } from '@/lib/database/client'
+import { DoaConfigurationError, DoaUpstreamError, readDoaOptimizations } from '@/lib/doa/client'
 import { selectVaultDoaOptimizations } from '@/lib/doa/overlay'
+import {
+  EnvioUpstreamError,
+  fetchAccountingCheckpoints,
+  fetchAllocationCoverage,
+  fetchUnresolvedCheckpointFailures
+} from '@/lib/envio/client'
+import type {
+  VaultAccountingCheckpoint,
+  VaultAccountingCheckpointFailure,
+  VaultAllocationCoverage
+} from '@/lib/envio/types'
 import { buildTransitions, type TransitionPoint } from './classify'
+import { AllocationHistoryCursorError } from './cursor'
 import { processDoa } from './doa'
-import { fetchKongAllocationEvents, isAllocationTransitionEvent } from './envio'
+import { fetchCompleteKongAllocationEvents, fetchKongAllocationEvents, isAllocationTransitionEvent } from './envio'
 import { materializeStates, type StateBlock } from './materialize'
-import { buildRestAllocationHistory } from './rest'
+import { readMaterializedAllocationHistory } from './repository'
+import { buildRestAllocationEntries, buildRestAllocationHistory } from './rest'
 import {
   type AllocatorTriggerReplayInput,
   readAllocatorTriggerReplays,
@@ -29,6 +44,7 @@ import type { TestVault } from './vaults'
 
 const CACHE_TTL_MS = 15 * 60 * 1000
 const REST_EVENT_SCAN_LIMIT = 100
+const DEFAULT_MAX_MATERIALIZATION_EVENTS = 250_000
 
 interface CachedHistory {
   expiresAt: number
@@ -61,7 +77,8 @@ export function eventBlocks(events: readonly AllocationSourceEvent[], limit?: nu
 async function pairedStateBlocks(
   chainId: number,
   transitions: readonly EventBlock[],
-  safeBlock: EventBlock
+  safeBlock: EventBlock,
+  coverageStartBlock = 0
 ): Promise<StateBlock[]> {
   const eventBlockNumbers = new Set(transitions.map((block) => block.blockNumber))
   const timestamps = new Map(transitions.map((block) => [block.blockNumber, block.blockTimestamp]))
@@ -69,7 +86,7 @@ async function pairedStateBlocks(
   const blockNumbers = new Set<number>([safeBlock.blockNumber])
   for (const transition of transitions) {
     blockNumbers.add(transition.blockNumber)
-    blockNumbers.add(Math.max(0, transition.blockNumber - 1))
+    if (transition.blockNumber > coverageStartBlock) blockNumbers.add(transition.blockNumber - 1)
   }
   const missingTimestamps = [...blockNumbers].filter((blockNumber) => !timestamps.has(blockNumber))
   const rpcTimestamps = await readBlockTimestamps(chainId, missingTimestamps)
@@ -179,12 +196,13 @@ function triggerReplayInputs(
 function eventTransitionPoints(
   chainId: number,
   vaultAddress: Address,
-  blocks: readonly EventBlock[]
+  blocks: readonly EventBlock[],
+  coverageStartBlock = 0
 ): TransitionPoint[] {
   return blocks.map(({ blockNumber, blockTimestamp }) => ({
     blockNumber,
     blockTimestamp,
-    fromStateId: stateId(chainId, vaultAddress, Math.max(0, blockNumber - 1)),
+    fromStateId: blockNumber > coverageStartBlock ? stateId(chainId, vaultAddress, blockNumber - 1) : null,
     toStateId: stateId(chainId, vaultAddress, blockNumber)
   }))
 }
@@ -254,12 +272,331 @@ function selectedTransitionPoints(
   chainId: number,
   vaultAddress: Address,
   blocks: readonly EventBlock[],
-  safeBlock: EventBlock
+  safeBlock: EventBlock,
+  coverageStartBlock = 0
 ): TransitionPoint[] {
-  const points = eventTransitionPoints(chainId, vaultAddress, blocks)
+  const points = eventTransitionPoints(chainId, vaultAddress, blocks, coverageStartBlock)
   const liveTail = liveTailPoint(chainId, vaultAddress, blocks, safeBlock)
   if (liveTail) points.push(liveTail)
   return points
+}
+
+function maxMaterializationEvents(): number {
+  const parsed = Number.parseInt(process.env.ALLOCATION_MAX_MATERIALIZATION_EVENTS ?? '', 10)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_MATERIALIZATION_EVENTS
+}
+
+function uncertifiedMaterializationAllowed(): boolean {
+  return process.env.ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION?.trim().toLowerCase() === 'true'
+}
+
+async function optionalDoaOptimizations(chainId: number): Promise<{
+  records: Awaited<ReturnType<typeof readDoaOptimizations>>
+  available: boolean
+}> {
+  try {
+    return { records: await readDoaOptimizations(chainId), available: true }
+  } catch (error) {
+    if (!(error instanceof DoaConfigurationError) && !(error instanceof DoaUpstreamError)) throw error
+    console.warn('DOA proposal enrichment is unavailable; materializing executed history without it')
+    return { records: [], available: false }
+  }
+}
+
+function uniqueLimitations(values: readonly string[]): string[] {
+  return [...new Set(values)]
+}
+
+function provisionalCoverage(vault: TestVault, safeBlock: EventBlock, limitations: readonly string[]) {
+  return {
+    id: `provisional:${vault.chainId}:${vault.address.toLowerCase()}:${safeBlock.blockNumber}`,
+    chainId: vault.chainId,
+    vaultAddress: vault.address.toLowerCase(),
+    coverageStartBlock: 0,
+    coverageStartBlockHash: `0x${'0'.repeat(64)}`,
+    validatedThroughBlock: safeBlock.blockNumber,
+    validatedThroughBlockHash: `0x${'0'.repeat(64)}`,
+    vaultDiscoveryComplete: false,
+    eventHistoryComplete: false,
+    allocatorDeploymentHistoryComplete: false,
+    allocatorAssignmentHistoryComplete: false,
+    checkpointTriggerAuditComplete: false,
+    safeForTimeline: false,
+    knownGaps: uniqueLimitations(limitations),
+    coverageRevision: `provisional-event-rpc-${safeBlock.blockNumber}`,
+    producerCommit: '0'.repeat(40),
+    validatedAt: new Date().toISOString()
+  } satisfies VaultAllocationCoverage
+}
+
+async function materializationHead(
+  vault: TestVault,
+  allowUncertified = false
+): Promise<{
+  coverage: VaultAllocationCoverage
+  safeBlock: EventBlock
+  limitations: string[]
+}> {
+  const rpcSafeBlock = await readLatestSafeBlock(vault.chainId)
+  let coverage: VaultAllocationCoverage | null = null
+  try {
+    coverage = await fetchAllocationCoverage({
+      chainId: vault.chainId,
+      vaultAddress: vault.address.toLowerCase(),
+      allowUnsafe: allowUncertified
+    })
+  } catch (error) {
+    if (!allowUncertified || !(error instanceof EnvioUpstreamError)) throw error
+    const limitations = ['Envio coverage metadata is unavailable; event replay begins at block 0']
+    return { coverage: provisionalCoverage(vault, rpcSafeBlock, limitations), safeBlock: rpcSafeBlock, limitations }
+  }
+  if (!coverage) {
+    if (!allowUncertified) throw new AllocationCoverageError('No certified Envio allocation coverage row was found')
+    const limitations = ['Envio coverage metadata is unavailable; event replay begins at block 0']
+    return { coverage: provisionalCoverage(vault, rpcSafeBlock, limitations), safeBlock: rpcSafeBlock, limitations }
+  }
+
+  const issues = allocationCoverageContractIssues(coverage)
+  if ((!coverage.safeForTimeline || issues.length > 0) && !allowUncertified) {
+    throw new AllocationCoverageError(
+      coverage.safeForTimeline
+        ? `Invalid Envio allocation coverage: ${issues.join(', ')}`
+        : `Envio coverage revision ${coverage.coverageRevision} is not safe for timeline use`
+    )
+  }
+  const validRange =
+    Number.isSafeInteger(coverage.coverageStartBlock) &&
+    Number.isSafeInteger(coverage.validatedThroughBlock) &&
+    coverage.coverageStartBlock >= 0 &&
+    coverage.coverageStartBlock <= coverage.validatedThroughBlock
+  if (!validRange) {
+    if (!allowUncertified) throw new AllocationCoverageError('Certified Envio coverage has an invalid block range')
+    const limitations = ['Envio coverage has an invalid block range; event replay begins at block 0']
+    return { coverage: provisionalCoverage(vault, rpcSafeBlock, limitations), safeBlock: rpcSafeBlock, limitations }
+  }
+
+  const blockNumber = Math.min(rpcSafeBlock.blockNumber, coverage.validatedThroughBlock)
+  if (blockNumber < coverage.coverageStartBlock) {
+    if (!allowUncertified) {
+      throw new AllocationCoverageError('Certified Envio coverage does not contain a materializable block')
+    }
+    const limitations = ['Envio coverage does not contain the current safe block; event replay begins at block 0']
+    return { coverage: provisionalCoverage(vault, rpcSafeBlock, limitations), safeBlock: rpcSafeBlock, limitations }
+  }
+  const safeBlock =
+    blockNumber === rpcSafeBlock.blockNumber
+      ? rpcSafeBlock
+      : {
+          blockNumber,
+          blockTimestamp: (await readBlockTimestamps(vault.chainId, [blockNumber])).get(blockNumber) as number
+        }
+  const limitations = coverage.safeForTimeline
+    ? issues.map((issue) => `Envio coverage issue: ${issue}`)
+    : [
+        'Envio coverage is not certified safe for timeline use',
+        ...coverage.knownGaps.map((gap) => `Envio reported gap: ${gap}`),
+        ...issues.map((issue) => `Envio coverage issue: ${issue}`)
+      ]
+  const effectiveCoverage =
+    limitations.length === 0
+      ? coverage
+      : { ...coverage, safeForTimeline: false, knownGaps: uniqueLimitations(limitations) }
+  return {
+    coverage: effectiveCoverage,
+    safeBlock,
+    limitations: effectiveCoverage.safeForTimeline ? [] : effectiveCoverage.knownGaps
+  }
+}
+
+async function checkpointEvidence(
+  range: { chainId: number; vaultAddress: Address; fromBlock: number; toBlock: number },
+  allowUncertified: boolean
+): Promise<{
+  checkpoints: VaultAccountingCheckpoint[]
+  failures: VaultAccountingCheckpointFailure[]
+  limitations: string[]
+}> {
+  const limitations: string[] = []
+  let checkpoints: VaultAccountingCheckpoint[] = []
+  let failures: VaultAccountingCheckpointFailure[] = []
+  try {
+    checkpoints = await fetchAccountingCheckpoints(range)
+  } catch (error) {
+    if (!allowUncertified || !(error instanceof EnvioUpstreamError)) throw error
+    limitations.push('Envio accounting checkpoints are unavailable; unallocated values are omitted')
+  }
+  try {
+    failures = await fetchUnresolvedCheckpointFailures(range)
+  } catch (error) {
+    if (!allowUncertified || !(error instanceof EnvioUpstreamError)) throw error
+    limitations.push('Envio checkpoint-failure records are unavailable')
+  }
+  return { checkpoints, failures, limitations }
+}
+
+function assertMaterializedAccounting(states: readonly AllocationState[]): void {
+  for (const state of states) {
+    const strategyDebt = state.strategies.reduce((sum, strategy) => sum + BigInt(strategy.currentDebt), 0n)
+    if (strategyDebt !== BigInt(state.totalDebt)) {
+      throw new AllocationCoverageError(`Strategy debt does not reconcile at block ${state.blockNumber}`)
+    }
+    if (state.totalIdle === null || BigInt(state.totalDebt) + BigInt(state.totalIdle) !== BigInt(state.totalAssets)) {
+      throw new AllocationCoverageError(`Vault accounting identity does not reconcile at block ${state.blockNumber}`)
+    }
+  }
+}
+
+export interface CompleteAllocationMaterialization {
+  generatedAt: number
+  coverage: VaultAllocationCoverage
+  safeBlock: EventBlock
+  vault: VaultAllocationHistoryResponse['vault']
+  entries: VaultAllocationHistoryResponse['entries']
+  allowProvisional: boolean
+}
+
+export async function materializeCompleteKongAllocationHistory(
+  vault: TestVault
+): Promise<CompleteAllocationMaterialization> {
+  const generatedAt = Math.floor(Date.now() / 1000)
+  const allowUncertified = uncertifiedMaterializationAllowed()
+  const head = await materializationHead(vault, allowUncertified)
+  const { safeBlock } = head
+  const range = {
+    chainId: vault.chainId,
+    vaultAddress: vault.address.toLowerCase() as Address,
+    fromBlock: head.coverage.coverageStartBlock,
+    toBlock: safeBlock.blockNumber
+  }
+  const [eventBatch, checkpointResult, doaFeed] = await Promise.all([
+    fetchCompleteKongAllocationEvents({ ...range, vaultAddress: vault.address, maxEvents: maxMaterializationEvents() }),
+    checkpointEvidence(range, allowUncertified),
+    optionalDoaOptimizations(vault.chainId)
+  ])
+  const limitations = [...head.limitations, ...checkpointResult.limitations]
+  if (!eventBatch.normalizedSupplementAvailable) {
+    if (!allowUncertified) {
+      throw new AllocationCoverageError('Envio normalized allocator configuration events are unavailable')
+    }
+    limitations.push('Envio normalized allocator configuration events are unavailable')
+  }
+  if (checkpointResult.failures.length > 0) {
+    if (!allowUncertified) {
+      throw new AllocationCoverageError(
+        `Envio has ${checkpointResult.failures.length} unresolved checkpoint failures in the certified range`
+      )
+    }
+    limitations.push(`Envio has ${checkpointResult.failures.length} unresolved checkpoint failures in this range`)
+  }
+  const materializationLimitations = uniqueLimitations(limitations)
+  const transitionBlocks = eventBlocks(eventBatch.events)
+  const firstTransitionBlock = transitionBlocks[0]?.blockNumber ?? safeBlock.blockNumber
+  const coverageStartBlock = head.coverage.safeForTimeline
+    ? head.coverage.coverageStartBlock
+    : Math.max(head.coverage.coverageStartBlock, firstTransitionBlock)
+  if (!head.coverage.safeForTimeline && coverageStartBlock > head.coverage.coverageStartBlock) {
+    materializationLimitations.push(
+      `Provisional state reconstruction begins at the first indexed transition block ${coverageStartBlock}`
+    )
+  }
+  const coverage =
+    materializationLimitations.length === 0
+      ? head.coverage
+      : {
+          ...head.coverage,
+          coverageStartBlock,
+          safeForTimeline: false,
+          knownGaps: uniqueLimitations(materializationLimitations)
+        }
+
+  const transitionBlockNumbers = new Set(transitionBlocks.map((block) => block.blockNumber))
+  const blocks = await pairedStateBlocks(vault.chainId, transitionBlocks, safeBlock, coverage.coverageStartBlock)
+  const transactionContexts = await readTransactionContexts(
+    vault.chainId,
+    eventBatch.events
+      .filter((event) => transitionBlockNumbers.has(event.blockNumber))
+      .map((event) => event.transactionHash),
+    vault.address
+  )
+  const hydratedEvents = hydrateTransactions(eventBatch.events, transactionContexts)
+  const [materialized, vaultMetadata] = await Promise.all([
+    materializeStates({
+      chainId: vault.chainId,
+      vaultAddress: vault.address,
+      blocks,
+      events: hydratedEvents,
+      checkpoints: checkpointResult.checkpoints
+    }),
+    readVaultMetadata(vault.chainId, vault.address, safeBlock.blockNumber)
+  ])
+  assertMaterializedAccounting(materialized.states)
+  const triggerReplays = await readAllocatorTriggerReplays(
+    vault.chainId,
+    triggerReplayInputs(
+      vault.address,
+      hydratedEvents,
+      hydratedEvents,
+      transactionContexts,
+      materialized.states,
+      vaultMetadata.assetDecimals
+    )
+  )
+  const latestState = materialized.states.find((state) => state.blockNumber === safeBlock.blockNumber)
+  if (!latestState) throw new Error('No current allocation state was materialized')
+  const names = await readContractNames(vault.chainId, materialized.strategyAddresses, safeBlock.blockNumber)
+  const baseTransitions = buildTransitions({
+    chainId: vault.chainId,
+    vaultAddress: vault.address,
+    points: selectedTransitionPoints(
+      vault.chainId,
+      vault.address,
+      transitionBlocks,
+      safeBlock,
+      coverage.coverageStartBlock
+    ),
+    events: hydratedEvents,
+    transactionContexts,
+    triggerReplays
+  })
+  const selectedDoaRecords = selectVaultDoaOptimizations(doaFeed.records, vault.address, Number.MAX_SAFE_INTEGER)
+  const doa = processDoa(selectedDoaRecords, baseTransitions, hydratedEvents)
+  const classifiedById = new Map(doa.transitions.map((transition) => [transition.id, transition]))
+  const classifiedTransitions = baseTransitions.map((transition) => {
+    const classified = classifiedById.get(transition.id)
+    if (!classified) return transition
+    const classifiedEffects = new Map(classified.effects.map((effect) => [effect.transactionHash, effect]))
+    return {
+      ...transition,
+      kind: classified.kind,
+      effects: transition.effects.map((effect) => ({
+        ...effect,
+        kind: classifiedEffects.get(effect.transactionHash)?.kind ?? effect.kind
+      })),
+      ...(classified.doa ? { doa: classified.doa } : {})
+    }
+  })
+  const normalized: NormalizedAllocationTimeline = {
+    generatedAt,
+    vault: vaultMetadata,
+    strategies: buildStrategyDirectory(materialized.strategyAddresses, names, latestState),
+    states: materialized.states,
+    transitions: classifiedTransitions,
+    unappliedDoaProposals: doa.unappliedDoaProposals,
+    events: hydratedEvents
+  }
+  return {
+    generatedAt,
+    coverage,
+    safeBlock,
+    vault: vaultMetadata,
+    allowProvisional: !coverage.safeForTimeline,
+    entries: buildRestAllocationEntries({
+      timeline: normalized,
+      doaRecords: selectedDoaRecords,
+      doaRecordsAvailable: doaFeed.available,
+      materializationLimitations: coverage.knownGaps
+    })
+  }
 }
 
 async function loadHistory(input: {
@@ -268,7 +605,7 @@ async function loadHistory(input: {
   direction: TimelineDirection
 }): Promise<VaultAllocationHistoryResponse> {
   const generatedAt = Math.floor(Date.now() / 1000)
-  const safeBlock = await readLatestSafeBlock(input.vault.chainId)
+  const { safeBlock } = await materializationHead(input.vault)
   const eventBatch = await fetchKongAllocationEvents({
     chainId: input.vault.chainId,
     vaultAddress: input.vault.address,
@@ -282,6 +619,21 @@ async function loadHistory(input: {
   )
   const hasMore = allEventBlocks.length > selectedEventBlocks.length
   const blocks = await pairedStateBlocks(input.vault.chainId, selectedEventBlocks, safeBlock)
+  const checkpointRange = {
+    chainId: input.vault.chainId,
+    vaultAddress: input.vault.address.toLowerCase(),
+    fromBlock: Math.min(...blocks.map((block) => block.blockNumber)),
+    toBlock: Math.max(...blocks.map((block) => block.blockNumber))
+  }
+  const [checkpoints, failures] = await Promise.all([
+    fetchAccountingCheckpoints(checkpointRange),
+    fetchUnresolvedCheckpointFailures(checkpointRange)
+  ])
+  if (failures.length > 0) {
+    throw new AllocationCoverageError(
+      `Envio has ${failures.length} unresolved checkpoint failures in the response range`
+    )
+  }
   const selectedBlockNumbers = new Set(blocks.map((block) => block.blockNumber))
   const selectedEvents = eventBatch.events.filter((event) => selectedBlockNumbers.has(event.blockNumber))
   const transactionContexts = await readTransactionContexts(
@@ -291,15 +643,16 @@ async function loadHistory(input: {
   )
   const hydratedEvents = hydrateTransactions(eventBatch.events, transactionContexts)
 
-  const [materialized, vaultMetadata, doaRecords] = await Promise.all([
+  const [materialized, vaultMetadata, doaFeed] = await Promise.all([
     materializeStates({
       chainId: input.vault.chainId,
       vaultAddress: input.vault.address,
       blocks,
-      events: hydratedEvents
+      events: hydratedEvents,
+      checkpoints
     }),
     readVaultMetadata(input.vault.chainId, input.vault.address, safeBlock.blockNumber),
-    readDoaOptimizations(input.vault.chainId)
+    optionalDoaOptimizations(input.vault.chainId)
   ])
   const triggerReplays = await readAllocatorTriggerReplays(
     input.vault.chainId,
@@ -330,7 +683,7 @@ async function loadHistory(input: {
     points: matchingTransitionPoints(input.vault.chainId, input.vault.address, hydratedEvents),
     events: hydratedEvents
   })
-  const selectedDoaRecords = selectVaultDoaOptimizations(doaRecords, input.vault.address, 500)
+  const selectedDoaRecords = selectVaultDoaOptimizations(doaFeed.records, input.vault.address, 500)
   const doa = processDoa(selectedDoaRecords, candidates, hydratedEvents)
   const classifiedById = new Map(doa.transitions.map((transition) => [transition.id, transition]))
   const classifiedTransitions = baseTransitions.map((transition) => {
@@ -360,6 +713,7 @@ async function loadHistory(input: {
   return buildRestAllocationHistory({
     timeline: normalized,
     doaRecords: selectedDoaRecords,
+    doaRecordsAvailable: doaFeed.available,
     direction: input.direction,
     limit: input.limit,
     hasMore
@@ -370,7 +724,17 @@ export async function getKongAllocationHistory(input: {
   vault: TestVault
   limit: number
   direction: TimelineDirection
+  cursor?: string | null
 }): Promise<VaultAllocationHistoryResponse> {
+  const configuredSource = process.env.ALLOCATION_HISTORY_SOURCE?.trim().toLowerCase() || 'live'
+  if (configuredSource !== 'database' && configuredSource !== 'live') {
+    throw new DatabaseConfigurationError('ALLOCATION_HISTORY_SOURCE must be database or live')
+  }
+  if (configuredSource === 'database') return readMaterializedAllocationHistory(input)
+  if (input.cursor) {
+    throw new AllocationHistoryCursorError('Cursor pagination requires the Postgres allocation history read model')
+  }
+
   const key = `${input.vault.chainId}:${input.vault.address.toLowerCase()}:${input.limit}:${input.direction}`
   const cached = historyCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.value

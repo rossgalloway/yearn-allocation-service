@@ -59,6 +59,26 @@ function rpcUrl(chainId: number): string {
   return value
 }
 
+async function rpcHttpFailure(response: Response): Promise<string> {
+  let message = ''
+  try {
+    const payload = (await response.json()) as
+      | { error?: { message?: unknown } }
+      | Array<{ error?: { message?: unknown } }>
+    const item = Array.isArray(payload) ? payload[0] : payload
+    message = typeof item?.error?.message === 'string' ? item.error.message.toLowerCase() : ''
+  } catch {
+    // The status code remains useful when a provider returns HTML or an empty body.
+  }
+
+  if (message.includes('balance exceeded')) return ': provider balance exceeded'
+  if (message.includes('rate limit') || message.includes('quota')) return ': provider rate limit or quota exceeded'
+  if (message.includes('unauthorized') || message.includes('forbidden') || message.includes('invalid key')) {
+    return ': provider authentication rejected'
+  }
+  return ''
+}
+
 async function rpcBatch(chainId: number, requests: RpcRequest[]): Promise<Map<number, RpcResponse>> {
   let response: Response
   try {
@@ -72,7 +92,10 @@ async function rpcBatch(chainId: number, requests: RpcRequest[]): Promise<Map<nu
   } catch (error) {
     throw new ArchiveRpcUpstreamError(`Unable to reach the archive RPC for chain ${chainId}`, { cause: error })
   }
-  if (!response.ok) throw new ArchiveRpcUpstreamError(`Archive RPC returned HTTP ${response.status}`)
+  if (!response.ok) {
+    const failure = await rpcHttpFailure(response)
+    throw new ArchiveRpcUpstreamError(`Archive RPC returned HTTP ${response.status}${failure}`)
+  }
 
   const payload = (await response.json()) as unknown
   if (!Array.isArray(payload)) throw new ArchiveRpcUpstreamError('Archive RPC returned an invalid batch response')

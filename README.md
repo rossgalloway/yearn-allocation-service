@@ -58,50 +58,74 @@ endpoint. Each record's `allocationSnapshot` is the canonical current-allocation
 
 ### `GET /api/health`
 
-Returns liveness and booleans for required upstream configuration. It never returns URLs or tokens.
+Reports the selected serving source, Postgres reachability, active materializations, their certification metadata, and the
+latest refresh result. It never returns URLs or tokens. In database mode, readiness requires a schema-version-2 run for all
+three test vaults; those runs must be certified unless the explicit test-only provisional switch is enabled.
 
 ### `GET /api/rest/views/allocation-history/:chainId/:address` (test)
 
 Returns the schema-version-2, chart-ready REST projection proposed for Kong. The response contains vault metadata, pagination,
 and a denormalized `entries` array; it does not expose top-level strategies, states, transitions, proposals, or raw events.
-This prototype reads events from Envio and enriches them through the configured archive RPC. It is intentionally limited to
-Ethereum and these vaults:
+Background jobs read events from Envio, enrich them through the configured archive RPC, and atomically activate a Postgres
+read-model generation. Public requests then read only Postgres. The implementation is intentionally limited to Ethereum and
+these vaults:
 
 - `yvUSDC-1`: `0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204`
 - `yvUSDT-1`: `0x310B7Ea7475A0B449Cfd73bE81522F1B88eFAFaa`
 - `yvUSD`: `0x696d02Db93291651ED510704c9b286841d506987`
 
-The route defaults to at most 25 entries, including a safe-block `current_snapshot`. It scans a bounded window of the latest 100
-raw transition blocks, removes REST-excluded accounting noise, groups related actions, and then applies the requested response
-limit. Each meaningful entry embeds its complete
+The route defaults to 25 entries, including a safe-block `current_snapshot`. Each meaningful entry embeds its complete
 whole-group `before` and `after` allocation, calculated strategy changes, compact transaction steps, policy provenance when
 available, and classification evidence. Multi-transaction keeper runs are grouped only when historical allocator trigger
 replay, traced execution path, allocator configuration, and state continuity agree.
 
 Responses default to `direction=desc` (newest first). Pass `direction=asc` for chronological order. `limit` accepts 1–100 final
-public entries; a response can contain fewer when the bounded scan does not contain enough qualifying actions. Raw events are
-deliberately not exposed by this REST route; they belong in the future Kong GraphQL detail surface. The response echoes its
-`direction` and uses the Kong cache headers from the spec.
+public entries. When `pagination.nextCursor` is non-null, pass it back unchanged with the same direction to continue through
+the complete materialized history. The opaque cursor pins the immutable run used by the first page, so a refresh cannot reorder
+or skip entries mid-traversal. Raw events are deliberately not exposed by this REST route; they belong in the future Kong
+GraphQL detail surface.
 
 Envio `Deposit` and `Withdraw` rows are context rather than allocation intent. Pure debt updates that only service withdrawals
 do not consume space in the public entries array. If the same transaction or block contains allocator execution, a confirmed
-`DEBT_MANAGER` caller, bad-debt handling, or configuration/lifecycle activity, that action remains visible under its action kind
-and retains `vaultActivities` with assets, shares, participants, and direct/routed path. Deposit-driven debt updates remain
-visible. Report-only accounting transitions are also omitted.
+`DEBT_MANAGER` caller, bad-debt handling, or configuration/lifecycle activity, that action remains visible and retains
+`vaultActivities` with assets, shares, participants, and direct/routed path. Deposit-driven debt updates remain visible as
+`idle_deployment`, including delayed keeper deployment after idle accumulates across separate deposit transactions. Report-only
+accounting transitions are also omitted.
+
+The public `kind` describes the whole grouped asset flow. Strategy debt increases without decreases are `idle_deployment`;
+decreases without increases are `idle_deallocation`; groups containing both are `strategy_reallocation`. If no debt moved, a
+pure policy, configuration, or lifecycle action may supply the kind instead. Exact strategy additions, retirements, max-debt
+changes, allocator settings, and other configuration changes are preserved as structured `operations`; a compound transaction
+keeps the economic-flow kind and carries those operations alongside it.
+
+`execution.automation` independently records whether the amount followed an automatic allocator recommendation or was chosen
+manually. `execution.mechanism` records the call path (`allocator_keeper`, `direct_vault_role`, `governance_safe`, and related
+values), while `execution.targetStatus` records whether an allocator target was `matched`, `overridden`, or unavailable.
+`policy` independently embeds a matching DOA configuration when one is available and remains null otherwise.
 
 Archive traces distinguish the top-level originator, relayer path, allocator, and immediate vault caller. Envio `RoleSet`
 history verifies whether that caller held `DEBT_MANAGER` at the execution block. Allocator calls are replayed through historical
-`shouldUpdateDebt`; target matches within the response's disclosed sub-unit tolerance become `target_maintenance`, while larger
-differences become `allocator_override`.
+`shouldUpdateDebt`; a target match produces `automation: automatic` and `targetStatus: matched`, while a caller-selected amount
+produces `automation: manual` and `targetStatus: overridden` without changing the economic-flow kind.
 Unresolved traces, role history, or trigger calls remain explicit limitations instead of being inferred from `transactionFrom`.
 
 DOA proposal age is not an execution status. A policy application is `confirmed` only when Envio supplies exact matching
 allocator configuration events. When the archive-RPC target configuration exactly matches a proposal but Envio lacks the
 shared allocator event, the inline policy is explicitly `inferred_from_historical_config`.
 
-This is a shape-validation endpoint, not the production refresh pipeline: it computes on demand, keeps a 15-minute in-memory
-cache, and reads at most the latest 1,000 rows from each Envio event family. Kong should materialize completed entries for
-predictable public latency and expose slower normalized investigation through GraphQL.
+`ALLOCATION_HISTORY_SOURCE=database` enables the materialized read path. `live` retains the bounded request-time prototype for
+local shape testing, but it still fails closed unless Envio provides certified coverage and checkpoints. Source selection is
+explicit; adding `DATABASE_URL` alone never cuts traffic over to an empty database.
+
+`ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION=true` is a test-only background-materialization switch. It permits Envio events
+and archive-RPC snapshots to produce an active provisional database run when certification entities are absent or incomplete.
+The REST response exposes `dataQuality.certification: "provisional"`, lists the evidence gaps, and is always uncached. Missing
+same-block checkpoints remain null rather than being presented as zero or inferred data. The request-time `live` path remains
+strict.
+
+See [docs/database.md](./docs/database.md) for migrations, backfill, refresh, verification, and cutover. The current refresh
+implementation intentionally performs a complete rebuild into a new immutable run. It does not yet implement incremental tail
+updates or a bounded old-run retention policy; those remain Kong production decisions.
 
 ## Local development
 
@@ -118,6 +142,7 @@ Verification:
 ```bash
 bun run lint
 bun run test
+bunx tsc --noEmit
 bun run build
 ```
 
@@ -131,5 +156,7 @@ The repository follows the same Yearn Vercel deployment pattern as `katana-apr-s
 - `RPC_URL_1`
 - `UPSTASH_REDIS_REST_URL`
 - `UPSTASH_REDIS_REST_TOKEN`
+- `DATABASE_URL`
+- `ALLOCATION_HISTORY_SOURCE=database` after all backfills pass health checks
 
-`ALLOW_UNSAFE_ALLOCATION_DATA` must remain false in production.
+`ALLOW_UNSAFE_ALLOCATION_DATA` and `ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION` must remain false in production.

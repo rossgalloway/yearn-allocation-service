@@ -1,3 +1,4 @@
+import type { VaultAccountingCheckpoint } from '@/lib/envio/types'
 import {
   ArchiveRpcUpstreamError,
   type ContractCall,
@@ -87,6 +88,31 @@ function uniqueTransactionHash(events: readonly AllocationSourceEvent[]): Alloca
   return hashes.length === 1 ? hashes[0] : null
 }
 
+function indexedUnallocated(
+  checkpoint: VaultAccountingCheckpoint | undefined,
+  totalAssets: bigint,
+  totalDebt: bigint,
+  totalIdle: bigint
+): Pick<AllocationState, 'unallocatedBps' | 'unallocatedSource' | 'unallocatedCheckpointId'> {
+  if (
+    checkpoint?.accountingIdentityHolds !== true ||
+    checkpoint.canonicalBlockVerified !== true ||
+    !/^\d+$/.test(checkpoint.totalAssets) ||
+    !/^\d+$/.test(checkpoint.totalDebt) ||
+    !/^\d+$/.test(checkpoint.totalIdle) ||
+    BigInt(checkpoint.totalAssets) !== totalAssets ||
+    BigInt(checkpoint.totalDebt) !== totalDebt ||
+    BigInt(checkpoint.totalIdle) !== totalIdle
+  ) {
+    return { unallocatedBps: null, unallocatedSource: null, unallocatedCheckpointId: null }
+  }
+  return {
+    unallocatedBps: bps(BigInt(checkpoint.totalIdle), BigInt(checkpoint.totalAssets)),
+    unallocatedSource: 'envio_same_block_checkpoint',
+    unallocatedCheckpointId: checkpoint.id
+  }
+}
+
 export interface MaterializedStates {
   states: AllocationState[]
   strategyAddresses: Address[]
@@ -97,6 +123,7 @@ export async function materializeStates(input: {
   vaultAddress: Address
   blocks: readonly StateBlock[]
   events: readonly AllocationSourceEvent[]
+  checkpoints?: readonly VaultAccountingCheckpoint[]
 }): Promise<MaterializedStates> {
   const strategies = strategyReferences(input.events)
   const allocators = allocatorReferences(input.events)
@@ -147,6 +174,7 @@ export async function materializeStates(input: {
     return blockCalls
   })
   const results = await readContractCalls(input.chainId, calls)
+  const checkpoints = new Map(input.checkpoints?.map((checkpoint) => [checkpoint.blockNumber, checkpoint]) ?? [])
   const states = input.blocks.map((block): AllocationState => {
     const totalAssets = decodeUint(results.get(key(block.blockNumber, 'totalAssets')) ?? null)
     const indexedTotalDebt = decodeUint(results.get(key(block.blockNumber, 'totalDebt')) ?? null)
@@ -188,6 +216,7 @@ export async function materializeStates(input: {
     const summedDebt = strategyRows.reduce((sum, strategy) => sum + BigInt(strategy.currentDebt), 0n)
     const totalDebt = indexedTotalDebt ?? summedDebt
     const blockEvents = input.events.filter((event) => event.blockNumber === block.blockNumber)
+    const unallocated = indexedUnallocated(checkpoints.get(block.blockNumber), totalAssets, totalDebt, totalIdle)
     return {
       id: `allocation-state:${input.chainId}:${input.vaultAddress.toLowerCase()}:${block.blockNumber}`,
       stateGranularity: block.stateGranularity,
@@ -197,7 +226,7 @@ export async function materializeStates(input: {
       totalAssets: totalAssets.toString(),
       totalDebt: totalDebt.toString(),
       totalIdle: totalIdle.toString(),
-      unallocatedBps: bps(totalIdle, totalAssets),
+      ...unallocated,
       allocatorAddress: allocator,
       sourceEventIds: blockEvents.map((event) => event.id),
       strategies: strategyRows

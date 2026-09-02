@@ -1,0 +1,496 @@
+import type { QueryResult, QueryResultRow } from 'pg'
+import { allocationCoverageContractIssues } from '@/lib/allocation/service'
+import {
+  type DatabaseQueryable,
+  DatabaseUpstreamError,
+  databasePool,
+  databaseQuery,
+  withDatabaseTransaction
+} from '@/lib/database/client'
+import type { VaultAllocationCoverage } from '@/lib/envio/types'
+import { AllocationHistoryCursorError, decodeAllocationHistoryCursor, encodeAllocationHistoryCursor } from './cursor'
+import type {
+  AllocationHistoryEntry,
+  TimelineDirection,
+  VaultAllocationHistoryResponse,
+  VaultAllocationVault
+} from './types'
+import type { TestVault } from './vaults'
+
+export const ALLOCATION_SCHEMA_VERSION = 2
+export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v1'
+const DEFAULT_STALE_RUN_SECONDS = 6 * 60 * 60
+const ENTRY_INSERT_BATCH_SIZE = 250
+
+interface ProjectionRow extends QueryResultRow {
+  projection_id: string
+  run_id: string
+  schema_version: number
+  generated_at: string
+  coverage_safe_for_timeline: boolean
+  coverage_known_gaps: string[] | string
+  vault_payload: VaultAllocationVault | string
+}
+
+interface EntryRow extends QueryResultRow {
+  entry_id: string
+  end_block: string
+  payload: AllocationHistoryEntry | string
+}
+
+interface RunRow extends QueryResultRow {
+  id: string
+  projection_id: string
+}
+
+export class AllocationHistoryNotMaterializedError extends Error {
+  constructor() {
+    super('Allocation history has not been materialized for this vault')
+    this.name = 'AllocationHistoryNotMaterializedError'
+  }
+}
+
+function jsonObject<T>(value: T | string, label: string): T {
+  if (typeof value !== 'string') return value
+  try {
+    return JSON.parse(value) as T
+  } catch (error) {
+    throw new DatabaseUpstreamError(`Postgres returned invalid ${label} JSON`, { cause: error })
+  }
+}
+
+async function projectionForPage(
+  queryable: DatabaseQueryable,
+  vault: TestVault,
+  cursor: ReturnType<typeof decodeAllocationHistoryCursor> | null
+): Promise<ProjectionRow> {
+  const values = cursor
+    ? [vault.chainId, vault.address.toLowerCase(), cursor.projectionId, cursor.runId]
+    : [vault.chainId, vault.address.toLowerCase()]
+  const where = cursor ? 'p.id = $3::bigint AND r.id = $4::bigint' : 'r.id = p.active_run_id'
+  const result = await queryable.query<ProjectionRow>(
+    `SELECT
+       p.id::text AS projection_id,
+       r.id::text AS run_id,
+       r.schema_version,
+       r.generated_at::text,
+       r.coverage_safe_for_timeline,
+       r.coverage_known_gaps,
+       r.vault_payload
+     FROM allocation_history_projection p
+     JOIN allocation_history_run r ON r.projection_id = p.id
+     WHERE p.chain_id = $1
+       AND p.vault_address = $2
+       AND ${where}
+       AND r.status = 'succeeded'
+     LIMIT 1`,
+    values
+  )
+  const row = result.rows[0]
+  if (!row && cursor) throw new AllocationHistoryCursorError('Allocation history cursor is no longer available')
+  if (row?.schema_version !== ALLOCATION_SCHEMA_VERSION || row.generated_at === null || row.vault_payload === null) {
+    throw new AllocationHistoryNotMaterializedError()
+  }
+  return row
+}
+
+export async function readMaterializedAllocationHistory(
+  input: {
+    vault: TestVault
+    limit: number
+    direction: TimelineDirection
+    cursor?: string | null
+  },
+  queryable: DatabaseQueryable = databasePool()
+): Promise<VaultAllocationHistoryResponse> {
+  const cursor = input.cursor ? decodeAllocationHistoryCursor(input.cursor, input.direction) : null
+  let projection: ProjectionRow
+  try {
+    projection = await projectionForPage(queryable, input.vault, cursor)
+  } catch (error) {
+    if (error instanceof AllocationHistoryNotMaterializedError) throw error
+    if (error instanceof DatabaseUpstreamError) throw error
+    throw new DatabaseUpstreamError('Unable to read the active allocation materialization', { cause: error })
+  }
+
+  const comparison = input.direction === 'desc' ? '<' : '>'
+  const order = input.direction === 'desc' ? 'DESC' : 'ASC'
+  const values: unknown[] = [projection.run_id, input.limit + 1]
+  let cursorClause = ''
+  if (cursor) {
+    values.push(cursor.endBlock, cursor.entryId)
+    cursorClause = `AND (end_block, entry_id) ${comparison} ($3::bigint, $4::text)`
+  }
+  let result: QueryResult<EntryRow>
+  try {
+    result = await queryable.query<EntryRow>(
+      `SELECT entry_id, end_block::text, payload
+       FROM allocation_history_entry
+       WHERE run_id = $1::bigint
+         ${cursorClause}
+       ORDER BY end_block ${order}, entry_id ${order}
+       LIMIT $2`,
+      values
+    )
+  } catch (error) {
+    throw new DatabaseUpstreamError('Unable to read materialized allocation entries', { cause: error })
+  }
+
+  const hasMore = result.rows.length > input.limit
+  const selected = result.rows.slice(0, input.limit)
+  const entries = selected.map((row) => jsonObject(row.payload, 'allocation entry'))
+  const limitations = jsonObject(projection.coverage_known_gaps, 'coverage limitations')
+  if (!Array.isArray(limitations) || !limitations.every((item) => typeof item === 'string')) {
+    throw new DatabaseUpstreamError('Postgres returned invalid coverage limitations JSON')
+  }
+  const last = selected.at(-1)
+  const nextCursor =
+    hasMore && last
+      ? encodeAllocationHistoryCursor({
+          version: 1,
+          projectionId: projection.projection_id,
+          runId: projection.run_id,
+          direction: input.direction,
+          endBlock: Number(last.end_block),
+          entryId: last.entry_id
+        })
+      : null
+
+  return {
+    schemaVersion: ALLOCATION_SCHEMA_VERSION,
+    generatedAt: Number(projection.generated_at),
+    direction: input.direction,
+    dataQuality: {
+      certification: projection.coverage_safe_for_timeline ? 'certified' : 'provisional',
+      limitations
+    },
+    vault: jsonObject(projection.vault_payload, 'vault metadata'),
+    entries,
+    pagination: {
+      limit: input.limit,
+      returned: entries.length,
+      hasMore,
+      nextCursor
+    }
+  }
+}
+
+export interface MaterializationRun {
+  id: string
+  projectionId: string
+}
+
+function staleRunSeconds(): number {
+  const parsed = Number.parseInt(process.env.ALLOCATION_STALE_RUN_SECONDS ?? '', 10)
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_STALE_RUN_SECONDS
+}
+
+export async function startMaterializationRun(input: {
+  vault: TestVault
+  mode: 'backfill' | 'refresh'
+}): Promise<MaterializationRun> {
+  return withDatabaseTransaction(async (client) => {
+    const projection = await client.query<{ id: string }>(
+      `INSERT INTO allocation_history_projection (chain_id, vault_address, vault_label)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (chain_id, vault_address)
+       DO UPDATE SET vault_label = EXCLUDED.vault_label, updated_at = now()
+       RETURNING id::text`,
+      [input.vault.chainId, input.vault.address.toLowerCase(), input.vault.label]
+    )
+    const projectionId = projection.rows[0]?.id
+    if (!projectionId) throw new Error('Projection insert did not return an ID')
+
+    const running = await client.query<{ id: string; is_stale: boolean }>(
+      `SELECT
+         id::text,
+         started_at < now() - ($2::integer * interval '1 second') AS is_stale
+       FROM allocation_history_run
+       WHERE projection_id = $1::bigint AND status = 'running'
+       FOR UPDATE`,
+      [projectionId, staleRunSeconds()]
+    )
+    const current = running.rows[0]
+    if (current && !current.is_stale) {
+      throw new DatabaseUpstreamError(`A materialization run is already active for ${input.vault.label}`)
+    }
+    if (current) {
+      await client.query(
+        `UPDATE allocation_history_run
+         SET status = 'failed',
+             error_code = 'StaleRunReplaced',
+             error_detail = 'A newer materialization replaced this stale running run',
+             completed_at = now()
+         WHERE id = $1::bigint`,
+        [current.id]
+      )
+    }
+
+    const run = await client.query<RunRow>(
+      `INSERT INTO allocation_history_run (
+         projection_id, mode, status, schema_version, materializer_version
+       ) VALUES ($1::bigint, $2, 'running', $3, $4)
+       RETURNING id::text, projection_id::text`,
+      [projectionId, input.mode, ALLOCATION_SCHEMA_VERSION, ALLOCATION_MATERIALIZER_VERSION]
+    )
+    const row = run.rows[0]
+    if (!row) throw new Error('Materialization run insert did not return an ID')
+    return { id: row.id, projectionId: row.projection_id }
+  })
+}
+
+export async function failMaterializationRun(runId: string, error: unknown): Promise<void> {
+  const detail = (error instanceof Error ? error.message : String(error)).slice(0, 2_000)
+  await databaseQuery(
+    `UPDATE allocation_history_run
+     SET status = 'failed', error_code = $2, error_detail = $3, completed_at = now()
+     WHERE id = $1::bigint AND status = 'running'`,
+    [runId, error instanceof Error ? error.name : 'UnknownError', detail]
+  )
+}
+
+export async function completeMaterializationRun(input: {
+  run: MaterializationRun
+  generatedAt: number
+  safeBlock: { blockNumber: number; blockTimestamp: number }
+  coverage: VaultAllocationCoverage
+  vault: VaultAllocationVault
+  entries: readonly AllocationHistoryEntry[]
+  allowProvisional?: boolean
+}): Promise<void> {
+  const coverageIssues = allocationCoverageContractIssues(input.coverage)
+  const certified = input.coverage.safeForTimeline && coverageIssues.length === 0
+  if (!certified && !input.allowProvisional) {
+    throw new DatabaseUpstreamError(
+      `Refusing to activate uncertified allocation history${coverageIssues.length > 0 ? `: ${coverageIssues.join(', ')}` : ''}`
+    )
+  }
+  if (!certified && input.coverage.knownGaps.length === 0) {
+    throw new DatabaseUpstreamError('Refusing to activate provisional allocation history without limitations')
+  }
+  if (
+    !Number.isSafeInteger(input.generatedAt) ||
+    !Number.isSafeInteger(input.safeBlock.blockNumber) ||
+    !Number.isSafeInteger(input.safeBlock.blockTimestamp) ||
+    input.safeBlock.blockNumber < input.coverage.coverageStartBlock ||
+    input.safeBlock.blockNumber > input.coverage.validatedThroughBlock
+  ) {
+    throw new DatabaseUpstreamError('Refusing to activate allocation history with invalid block bounds')
+  }
+  if (
+    input.vault.chainId !== input.coverage.chainId ||
+    input.vault.address.toLowerCase() !== input.coverage.vaultAddress.toLowerCase()
+  ) {
+    throw new DatabaseUpstreamError('Refusing to activate allocation history for mismatched vault coverage')
+  }
+  const currentSnapshots = input.entries.filter((entry) => entry.kind === 'current_snapshot')
+  if (
+    currentSnapshots.length !== 1 ||
+    currentSnapshots[0].endBlock !== input.safeBlock.blockNumber ||
+    currentSnapshots[0].endTimestamp !== input.safeBlock.blockTimestamp ||
+    new Set(input.entries.map((entry) => entry.id)).size !== input.entries.length
+  ) {
+    throw new DatabaseUpstreamError('Refusing to activate an incomplete allocation history projection')
+  }
+  for (const entry of input.entries) {
+    const states = entry.before ? [entry.before, entry.after] : [entry.after]
+    if (
+      states.some(
+        (state) =>
+          state.accountingChecks.totalAssetsEqualsDebtPlusIdle !== true ||
+          state.accountingChecks.strategyDebtSumEqualsTotalDebt !== true
+      )
+    ) {
+      throw new DatabaseUpstreamError(`Refusing to activate unreconciled allocation entry ${entry.id}`)
+    }
+  }
+
+  await withDatabaseTransaction(async (client) => {
+    const run = await client.query<RunRow>(
+      `SELECT id::text, projection_id::text
+       FROM allocation_history_run
+       WHERE id = $1::bigint AND projection_id = $2::bigint AND status = 'running'
+       FOR UPDATE`,
+      [input.run.id, input.run.projectionId]
+    )
+    if (!run.rows[0]) throw new Error('Materialization run is no longer active')
+
+    for (let start = 0; start < input.entries.length; start += ENTRY_INSERT_BATCH_SIZE) {
+      const page = input.entries.slice(start, start + ENTRY_INSERT_BATCH_SIZE).map((entry) => ({
+        entry_id: entry.id,
+        kind: entry.kind,
+        start_block: entry.startBlock,
+        end_block: entry.endBlock,
+        start_timestamp: entry.startTimestamp,
+        end_timestamp: entry.endTimestamp,
+        payload: entry
+      }))
+      await client.query(
+        `INSERT INTO allocation_history_entry (
+           run_id, entry_id, kind, start_block, end_block,
+           start_timestamp, end_timestamp, payload
+         )
+         SELECT
+           $1::bigint,
+           item.entry_id,
+           item.kind,
+           item.start_block,
+           item.end_block,
+           item.start_timestamp,
+           item.end_timestamp,
+           item.payload
+         FROM jsonb_to_recordset($2::jsonb) AS item(
+           entry_id text,
+           kind text,
+           start_block bigint,
+           end_block bigint,
+           start_timestamp bigint,
+           end_timestamp bigint,
+           payload jsonb
+         )`,
+        [input.run.id, JSON.stringify(page)]
+      )
+    }
+
+    const completed = await client.query(
+      `UPDATE allocation_history_run
+       SET status = 'succeeded',
+           generated_at = $2,
+           safe_block = $3,
+           safe_block_timestamp = $4,
+           coverage_start_block = $5,
+           coverage_start_block_hash = $6,
+           validated_through_block = $7,
+           validated_through_block_hash = $8,
+           coverage_revision = $9,
+           coverage_producer_commit = $10,
+           coverage_safe_for_timeline = $11,
+           coverage_known_gaps = $12::jsonb,
+           vault_payload = $13::jsonb,
+           entry_count = $14,
+           completed_at = now()
+       WHERE id = $1::bigint`,
+      [
+        input.run.id,
+        input.generatedAt,
+        input.safeBlock.blockNumber,
+        input.safeBlock.blockTimestamp,
+        input.coverage.coverageStartBlock,
+        input.coverage.coverageStartBlockHash,
+        input.coverage.validatedThroughBlock,
+        input.coverage.validatedThroughBlockHash,
+        input.coverage.coverageRevision,
+        input.coverage.producerCommit,
+        input.coverage.safeForTimeline,
+        JSON.stringify(input.coverage.knownGaps),
+        JSON.stringify(input.vault),
+        input.entries.length
+      ]
+    )
+    if (completed.rowCount !== 1) throw new Error('Materialization run completion failed')
+    const activated = await client.query(
+      `UPDATE allocation_history_projection
+       SET active_run_id = $2::bigint, updated_at = now()
+       WHERE id = $1::bigint`,
+      [input.run.projectionId, input.run.id]
+    )
+    if (activated.rowCount !== 1) throw new Error('Materialization projection activation failed')
+  })
+}
+
+export async function probeDatabase(): Promise<boolean> {
+  try {
+    const result = await databaseQuery<{ ok: number }>('SELECT 1 AS ok')
+    return result.rows[0]?.ok === 1
+  } catch {
+    return false
+  }
+}
+
+export interface AllocationMaterializationStatus {
+  chainId: number
+  vaultAddress: string
+  vaultLabel: string
+  runId: string | null
+  generatedAt: number | null
+  safeBlock: number | null
+  coverageRevision: string | null
+  coverageSafeForTimeline: boolean | null
+  schemaVersion: number | null
+  materializerVersion: string | null
+  entryCount: number | null
+  completedAt: string | null
+  latestAttemptStatus: 'running' | 'succeeded' | 'failed' | null
+  latestAttemptErrorCode: string | null
+  latestAttemptStartedAt: string | null
+  latestAttemptCompletedAt: string | null
+}
+
+export async function readAllocationMaterializationStatuses(): Promise<AllocationMaterializationStatus[]> {
+  const result = await databaseQuery<{
+    chain_id: number
+    vault_address: string
+    vault_label: string
+    run_id: string | null
+    generated_at: string | null
+    safe_block: string | null
+    coverage_revision: string | null
+    coverage_safe_for_timeline: boolean | null
+    schema_version: number | null
+    materializer_version: string | null
+    entry_count: number | null
+    completed_at: Date | string | null
+    latest_attempt_status: 'running' | 'succeeded' | 'failed' | null
+    latest_attempt_error_code: string | null
+    latest_attempt_started_at: Date | string | null
+    latest_attempt_completed_at: Date | string | null
+  }>(
+    `SELECT
+       p.chain_id,
+       p.vault_address,
+       p.vault_label,
+       r.id::text AS run_id,
+       r.generated_at::text,
+       r.safe_block::text,
+       r.coverage_revision,
+       r.coverage_safe_for_timeline,
+       r.schema_version,
+       r.materializer_version,
+       r.entry_count,
+       r.completed_at,
+       latest.status AS latest_attempt_status,
+       latest.error_code AS latest_attempt_error_code,
+       latest.started_at AS latest_attempt_started_at,
+       latest.completed_at AS latest_attempt_completed_at
+     FROM allocation_history_projection p
+     LEFT JOIN allocation_history_run r ON r.id = p.active_run_id
+     LEFT JOIN LATERAL (
+       SELECT status, error_code, started_at, completed_at
+       FROM allocation_history_run candidate
+       WHERE candidate.projection_id = p.id
+       ORDER BY candidate.id DESC
+       LIMIT 1
+     ) latest ON true
+     ORDER BY p.chain_id, p.vault_address`
+  )
+  const timestamp = (value: Date | string | null): string | null =>
+    value instanceof Date ? value.toISOString() : value
+  return result.rows.map((row) => ({
+    chainId: row.chain_id,
+    vaultAddress: row.vault_address,
+    vaultLabel: row.vault_label,
+    runId: row.run_id,
+    generatedAt: row.generated_at === null ? null : Number(row.generated_at),
+    safeBlock: row.safe_block === null ? null : Number(row.safe_block),
+    coverageRevision: row.coverage_revision,
+    coverageSafeForTimeline: row.coverage_safe_for_timeline,
+    schemaVersion: row.schema_version,
+    materializerVersion: row.materializer_version,
+    entryCount: row.entry_count,
+    completedAt: timestamp(row.completed_at),
+    latestAttemptStatus: row.latest_attempt_status,
+    latestAttemptErrorCode: row.latest_attempt_error_code,
+    latestAttemptStartedAt: timestamp(row.latest_attempt_started_at),
+    latestAttemptCompletedAt: timestamp(row.latest_attempt_completed_at)
+  }))
+}
