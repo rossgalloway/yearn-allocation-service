@@ -4,6 +4,7 @@ import type {
   AllocationChartEntry,
   AllocationChartEntryKind,
   AllocationChartExpectedAprImpact,
+  AllocationChartInterval,
   AllocationChartState,
   AllocationEntryState,
   AllocationHistoryEntry,
@@ -75,6 +76,7 @@ function chartState(
   const allocations = new Map(state.allocations.map((allocation) => [allocation.strategyAddress, allocation]))
   return {
     blockNumber: state.blockNumber,
+    blockTimestamp: state.blockTimestamp,
     totalAssets: state.totalAssets,
     totalIdle: state.totalIdle,
     idleBps: idleBps(state),
@@ -137,7 +139,8 @@ function detailsHref(vault: VaultAllocationVault, entryId: string, runId: string
 export function buildAllocationChartEntry(
   entry: AllocationHistoryEntry,
   vault: VaultAllocationVault,
-  runId: string
+  runId: string,
+  interval: AllocationChartInterval | null = null
 ): AllocationChartEntry | null {
   if (!isAllocationChartEntryKind(entry.kind)) return null
   if (!entry.before) throw new Error(`Chart entry ${entry.id} is missing its before state`)
@@ -152,6 +155,7 @@ export function buildAllocationChartEntry(
     endTimestamp: entry.endTimestamp,
     before: chartState(entry.before, addresses, names),
     after: chartState(entry.after, addresses, names),
+    interval,
     execution: {
       automation: entry.execution.automation,
       mechanism: entry.execution.mechanism,
@@ -171,7 +175,8 @@ export function buildAllocationChartEntry(
 }
 
 export function buildAllocationChartCurrentSnapshot(
-  entry: AllocationHistoryEntry
+  entry: AllocationHistoryEntry,
+  interval: AllocationChartInterval | null = null
 ): AllocationChartCurrentSnapshot | null {
   if (entry.kind !== 'current_snapshot') return null
   const addresses = entry.after.allocations
@@ -182,7 +187,7 @@ export function buildAllocationChartCurrentSnapshot(
   return {
     id: entry.id,
     kind: 'current_snapshot',
-    blockTimestamp: entry.after.blockTimestamp,
+    interval,
     ...state
   }
 }
@@ -190,7 +195,10 @@ export function buildAllocationChartCurrentSnapshot(
 export function buildAllocationChartPayload(
   entry: AllocationHistoryEntry,
   vault: VaultAllocationVault,
-  runId: string
+  runId: string,
+  interval: AllocationChartInterval | null = null
 ): AllocationChartEntry | AllocationChartCurrentSnapshot | null {
-  return buildAllocationChartCurrentSnapshot(entry) ?? buildAllocationChartEntry(entry, vault, runId)
+  return (
+    buildAllocationChartCurrentSnapshot(entry, interval) ?? buildAllocationChartEntry(entry, vault, runId, interval)
+  )
 }

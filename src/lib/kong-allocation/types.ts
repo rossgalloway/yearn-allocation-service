@@ -43,6 +43,7 @@ export interface AllocationChartStrategyState {
 
 export interface AllocationChartState {
   blockNumber: number
+  blockTimestamp: number
   totalAssets: string
   totalIdle: string | null
   idleBps: number | null
@@ -52,7 +53,71 @@ export interface AllocationChartState {
 export interface AllocationChartCurrentSnapshot extends AllocationChartState {
   id: string
   kind: 'current_snapshot'
-  blockTimestamp: number
+  interval: AllocationChartInterval | null
+}
+
+export type AllocationFlowBalanceNode = { type: 'idle' } | { type: 'strategy'; address: Address; name: string | null }
+
+export type AllocationFlowBoundaryNode = { type: 'external' } | { type: 'accounting' }
+
+export type AllocationFlowNode = AllocationFlowBalanceNode | AllocationFlowBoundaryNode
+
+export type AllocationFlowKind =
+  | 'deposit'
+  | 'withdrawal'
+  | 'idle_deployment'
+  | 'idle_deallocation'
+  | 'strategy_reallocation'
+  | 'reported_gain'
+  | 'reported_loss'
+  | 'report_refund'
+  | 'bad_debt_purchase'
+  | 'unattributed_asset_change'
+
+export interface AllocationIntervalFlow {
+  source: AllocationFlowNode
+  target: AllocationFlowNode
+  amount: string
+  kind: AllocationFlowKind
+  attribution: 'observed_event' | 'derived_from_debt_updates' | 'residual_balance'
+  evidence: {
+    eventCount: number
+    transactionCount: number
+  }
+  accounting?: {
+    totalFees: string
+    protocolFees: string
+  }
+}
+
+export interface AllocationFlowResidual {
+  node: AllocationFlowBalanceNode
+  openingBalance: string
+  closingBalance: string
+  attributedInflows: string
+  attributedOutflows: string
+  unattributedInflows: string
+  unattributedOutflows: string
+  residualAmount: string
+}
+
+export interface AllocationChartInterval {
+  fromEntryId: string
+  toEntryId: string | null
+  endKind: 'allocation_entry' | 'safe_head'
+  startState: AllocationChartState
+  endState: AllocationChartState
+  flows: AllocationIntervalFlow[]
+  reconciliation: {
+    openingTotalAssets: string
+    closingTotalAssets: string
+    totalAssetsDelta: string
+    balanceStatus: 'reconciled' | 'unreconciled'
+    attributionStatus: 'complete' | 'partial'
+    unattributedAmount: string
+    checkedNodeTypes: ['idle', 'strategy']
+    residuals: AllocationFlowResidual[]
+  }
 }
 
 export type AllocationChartExpectedAprImpact =
@@ -88,6 +153,7 @@ export interface AllocationChartEntry {
   endTimestamp: number
   before: AllocationChartState
   after: AllocationChartState
+  interval: AllocationChartInterval | null
   execution: {
     automation: AllocationHistoryEntry['execution']['automation']
     mechanism: AllocationHistoryEntry['execution']['mechanism']

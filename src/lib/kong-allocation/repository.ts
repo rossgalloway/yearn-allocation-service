@@ -10,10 +10,12 @@ import {
 import type { VaultAllocationCoverage } from '@/lib/envio/types'
 import { buildAllocationChartPayload } from './chart'
 import { AllocationHistoryCursorError, decodeAllocationHistoryCursor, encodeAllocationHistoryCursor } from './cursor'
+import { buildAllocationFlowIntervals } from './flow-ledger'
 import type {
   AllocationChartCurrentSnapshot,
   AllocationChartEntry,
   AllocationHistoryEntry,
+  AllocationSourceEvent,
   TimelineDirection,
   VaultAllocationChartResponse,
   VaultAllocationHistoryEntryResponse,
@@ -23,7 +25,7 @@ import type {
 import type { TestVault } from './vaults'
 
 export const ALLOCATION_SCHEMA_VERSION = 2
-export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v2-chart'
+export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v2-flow-ledger'
 const DEFAULT_STALE_RUN_SECONDS = 6 * 60 * 60
 const ENTRY_INSERT_BATCH_SIZE = 250
 
@@ -468,6 +470,7 @@ export async function completeMaterializationRun(input: {
   coverage: VaultAllocationCoverage
   vault: VaultAllocationVault
   entries: readonly AllocationHistoryEntry[]
+  sourceEvents?: readonly AllocationSourceEvent[]
   allowProvisional?: boolean
 }): Promise<void> {
   const coverageIssues = allocationCoverageContractIssues(input.coverage)
@@ -516,6 +519,23 @@ export async function completeMaterializationRun(input: {
       throw new DatabaseUpstreamError(`Refusing to activate unreconciled allocation entry ${entry.id}`)
     }
   }
+  const flowIntervals = buildAllocationFlowIntervals({
+    entries: input.entries,
+    events: input.sourceEvents ?? [],
+    vaultAddress: input.vault.address
+  })
+  for (const [entryId, interval] of flowIntervals) {
+    const unattributedAmount = interval.flows
+      .filter((flow) => flow.kind === 'unattributed_asset_change')
+      .reduce((sum, flow) => sum + BigInt(flow.amount), 0n)
+    if (
+      interval.reconciliation.balanceStatus !== 'reconciled' ||
+      interval.reconciliation.residuals.some((residual) => residual.residualAmount !== '0') ||
+      unattributedAmount.toString() !== interval.reconciliation.unattributedAmount
+    ) {
+      throw new DatabaseUpstreamError(`Refusing to activate unreconciled allocation interval for ${entryId}`)
+    }
+  }
 
   await withDatabaseTransaction(async (client) => {
     const run = await client.query<RunRow>(
@@ -536,7 +556,12 @@ export async function completeMaterializationRun(input: {
         start_timestamp: entry.startTimestamp,
         end_timestamp: entry.endTimestamp,
         payload: entry,
-        chart_payload: buildAllocationChartPayload(entry, input.vault, input.run.id)
+        chart_payload: buildAllocationChartPayload(
+          entry,
+          input.vault,
+          input.run.id,
+          flowIntervals.get(entry.id) ?? null
+        )
       }))
       await client.query(
         `INSERT INTO allocation_history_entry (

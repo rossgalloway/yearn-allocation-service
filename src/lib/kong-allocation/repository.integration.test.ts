@@ -126,6 +126,12 @@ describeDatabase('Postgres allocation history repository', () => {
 
     const chartPage = await readMaterializedAllocationChart({ vault, limit: 1, direction: 'desc' })
     expect(chartPage.currentSnapshot?.id).toBe('current:110')
+    expect(chartPage.currentSnapshot?.interval).toMatchObject({
+      fromEntryId: 'action:100',
+      toEntryId: null,
+      endKind: 'safe_head',
+      reconciliation: { balanceStatus: 'reconciled', attributionStatus: 'complete', unattributedAmount: '0' }
+    })
     expect(chartPage.entries.map((item) => item.id)).toEqual(['action:100'])
     const chartDetail = await readMaterializedAllocationEntry({
       vault,

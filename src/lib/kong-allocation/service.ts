@@ -458,6 +458,7 @@ export interface CompleteAllocationMaterialization {
   safeBlock: EventBlock
   vault: VaultAllocationHistoryResponse['vault']
   entries: VaultAllocationHistoryResponse['entries']
+  sourceEvents: AllocationSourceEvent[]
   allowProvisional: boolean
 }
 
@@ -596,6 +597,7 @@ export async function materializeCompleteKongAllocationHistory(
     safeBlock,
     vault: vaultMetadata,
     allowProvisional: !coverage.safeForTimeline,
+    sourceEvents: hydratedEvents,
     entries: buildRestAllocationEntries({
       timeline: normalized,
       doaRecords: selectedDoaRecords,

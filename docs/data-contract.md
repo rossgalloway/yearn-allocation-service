@@ -61,6 +61,38 @@ remains visible through `applicationStatus`, not as a temporal relationship.
 Chart `detailsHref` values include the immutable run ID. The detail route returns the full stored entry from that run, so a
 later refresh cannot change the evidence behind an already-rendered chart point.
 
+#### Interval flow ledger
+
+The chart payload materializes an `interval` on every chart entry except the oldest one. Its boundaries are the previous chart
+entry's `after` state and the current entry's `after` state, identified by `fromEntryId` and `toEntryId`. The current snapshot
+may carry the final interval from the latest entry to the safe head; that interval uses `toEntryId: null` and
+`endKind: "safe_head"`.
+
+All flow amounts are decimal strings in raw underlying asset units. `Deposit` and `Withdraw` supply literal external flows.
+`StrategyReported` gains and losses use an `accounting` source/sink because they change book value without implying an ERC-20
+transfer from an external wallet; report refunds are literal external-to-idle transfers. Fee amounts remain report metadata
+because Vault V3 issues fee shares rather than moving underlying out of the allocation state. `DebtUpdated` supplies derived
+book-debt movements. Decreases and increases inside one execution group may be collapsed across idle into a deterministic
+strategy-to-strategy flow.
+
+The checked conservation equation applies independently to every relevant balance-bearing node (`idle` and each strategy with
+a nonzero boundary balance or interval flow):
+
+```text
+opening balance
++ attributed inflows
+- attributed outflows
++ unattributed inflows
+- unattributed outflows
+= closing balance
+```
+
+`external` and `accounting` are boundary source/sink nodes; the API does not claim to know their balances. `balanceStatus` is
+`reconciled` only when every per-node final `residualAmount` is zero. Any remaining evidence gap becomes an explicit
+`unattributed_asset_change` against the accounting boundary, which keeps the balance equation exact but sets
+`attributionStatus: "partial"`. `unattributedAmount` is defined as the sum of the amounts of those unattributed flow records.
+The `residuals` array lists the opening, closing, attributed, unattributed, and final residual terms for every checked node.
+
 Standalone deposit/withdrawal context, report-only accounting changes, and pure debt updates that only service withdrawals are
 excluded from the default REST entries. Withdrawal context never overrides stronger intent evidence: allocator execution,
 historically confirmed `DEBT_MANAGER` calls, bad-debt handling, and configuration/lifecycle actions remain visible and retain

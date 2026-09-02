@@ -96,6 +96,18 @@ classification confidence. `expectedAprImpact` labels DOA baseline/proposed APRs
 whether the policy was applied in the entry or was already governing it. Missing policy/APR data is an explicit unavailable
 variant. Each chart entry links to a run-pinned full-detail route under `/entries/:entryId?runId=...`.
 
+Every chart entry after the oldest history point also embeds a materialized interval ledger from the preceding chart entry's
+`after` state to its own `after` state. The current snapshot carries the tail interval with `toEntryId: null` and
+`endKind: "safe_head"`. Ledger amounts are raw underlying units. Literal deposits, withdrawals, and report refunds use the
+`external` boundary node; reported gains and losses use the non-custodial `accounting` boundary node. Debt updates are marked as
+derived, and idle round trips may be collapsed into strategy-to-strategy flows.
+
+Reconciliation is checked independently for idle and every strategy with a nonzero boundary balance or interval flow.
+`balanceStatus` proves that the ledger reproduces all closing balances, while `attributionStatus` says whether any balancing
+flow remained unattributed. `unattributedAmount` is exactly the sum of `unattributed_asset_change` flow amounts, and each
+`residuals` row exposes the complete per-node equation.
+External and accounting nodes are sources or sinks, not balances whose holdings this API claims to know.
+
 Envio `Deposit` and `Withdraw` rows are context rather than allocation intent. Pure debt updates that only service withdrawals
 do not consume space in the public entries array. If the same transaction or block contains allocator execution, a confirmed
 `DEBT_MANAGER` caller, bad-debt handling, or configuration/lifecycle activity, that action remains visible and retains

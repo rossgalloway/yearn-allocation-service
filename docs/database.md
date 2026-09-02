@@ -41,7 +41,9 @@ The named Docker volume survives `bun run db:down`. Use an explicit provider URL
 `allocation_history_run` and its denormalized `allocation_history_entry` rows in isolation. Every chartable row stores both its
 full evidence payload and its compact `chart_payload`; pure configuration/lifecycle rows keep only the full payload. Completion
 validates the coverage contract, accounting checks, vault identity, block bounds, unique entry IDs, and exactly one safe-head
-`current_snapshot` with its compact chart state.
+`current_snapshot` with its compact chart state. Chart payloads also contain interval ledgers constructed from the complete
+Envio event stream before standalone deposits, withdrawals, and reports are removed from the public entry timeline. Activation
+verifies every interval's node residuals and unattributed-flow total before switching the active run.
 Only then does the same transaction mark the run successful and change the projection's active pointer. In explicit test mode,
 the same validation and atomic activation apply, but the run may be provisional when its non-empty limitations explain the
 missing certification evidence.
