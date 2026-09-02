@@ -64,8 +64,9 @@ three test vaults; those runs must be certified unless the explicit test-only pr
 
 ### `GET /api/rest/views/allocation-history/:chainId/:address` (test)
 
-Returns the schema-version-2, chart-ready REST projection proposed for Kong. The response contains vault metadata, pagination,
-and a denormalized `entries` array; it does not expose top-level strategies, states, transitions, proposals, or raw events.
+Without a `projection` parameter, returns the schema-version-2 evidence-rich REST projection proposed for Kong. The response
+contains vault metadata, pagination, and a denormalized `entries` array; it does not expose top-level strategies, states,
+transitions, proposals, or raw events.
 Background jobs read events from Envio, enrich them through the configured archive RPC, and atomically activate a Postgres
 read-model generation. Public requests then read only Postgres. The implementation is intentionally limited to Ethereum and
 these vaults:
@@ -81,9 +82,19 @@ replay, traced execution path, allocator configuration, and state continuity agr
 
 Responses default to `direction=desc` (newest first). Pass `direction=asc` for chronological order. `limit` accepts 1–100 final
 public entries. When `pagination.nextCursor` is non-null, pass it back unchanged with the same direction to continue through
-the complete materialized history. The opaque cursor pins the immutable run used by the first page, so a refresh cannot reorder
-or skip entries mid-traversal. Raw events are deliberately not exposed by this REST route; they belong in the future Kong
-GraphQL detail surface.
+the complete materialized history. The opaque cursor pins the immutable run, direction, and selected projection used by the
+first page, so a refresh cannot reorder or skip entries mid-traversal and a chart cursor cannot be used with the full response.
+Raw events are deliberately not exposed by this REST route; they belong in the future Kong GraphQL detail surface.
+
+Pass `projection=chart` for the compact website-hydration shape. The database filters before applying `limit`, so chart pages
+contain only `idle_deployment`, `idle_deallocation`, and `strategy_reallocation` entries. The initial page returns the safe-head
+state separately as `currentSnapshot`; cursor pages set it to null. Chart states include exact `totalIdle` and a derived
+`idleBps = floor(totalIdle * 10,000 / totalAssets)`, which remains distinct from checkpoint-owned `unallocatedBps`.
+
+The chart projection keeps only relevant strategies, compact transaction identifiers, structured operation summaries, and
+classification confidence. `expectedAprImpact` labels DOA baseline/proposed APRs as proposal-scoped expectations and states
+whether the policy was applied in the entry or was already governing it. Missing policy/APR data is an explicit unavailable
+variant. Each chart entry links to a run-pinned full-detail route under `/entries/:entryId?runId=...`.
 
 Envio `Deposit` and `Withdraw` rows are context rather than allocation intent. Pure debt updates that only service withdrawals
 do not consume space in the public entries array. If the same transaction or block contains allocator execution, a confirmed
@@ -123,7 +134,9 @@ The REST response exposes `dataQuality.certification: "provisional"`, lists the 
 same-block checkpoints remain null rather than being presented as zero or inferred data. The request-time `live` path remains
 strict.
 
-See [docs/database.md](./docs/database.md) for migrations, backfill, refresh, verification, and cutover. The current refresh
+The materializer stores both the full evidence payload and the compact chart payload, so chart requests do not load and trim
+the larger JSON at request time. See [docs/database.md](./docs/database.md) for migrations, backfill, refresh, verification,
+and cutover. The current refresh
 implementation intentionally performs a complete rebuild into a new immutable run. It does not yet implement incremental tail
 updates or a bounded old-run retention policy; those remain Kong production decisions.
 

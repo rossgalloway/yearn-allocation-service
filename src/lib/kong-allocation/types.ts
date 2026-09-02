@@ -1,6 +1,7 @@
 export type Address = `0x${string}`
 export type Hash = `0x${string}`
 export type TimelineDirection = 'asc' | 'desc'
+export type AllocationHistoryProjection = 'full' | 'chart'
 
 export interface NormalizedAllocationTimeline {
   generatedAt: number
@@ -14,6 +15,7 @@ export interface NormalizedAllocationTimeline {
 
 export interface VaultAllocationHistoryResponse {
   schemaVersion: 2
+  projection: 'full'
   generatedAt: number
   direction: TimelineDirection
   dataQuality: {
@@ -28,6 +30,101 @@ export interface VaultAllocationHistoryResponse {
     hasMore: boolean
     nextCursor: string | null
   }
+}
+
+export type AllocationChartEntryKind = 'idle_deployment' | 'idle_deallocation' | 'strategy_reallocation'
+
+export interface AllocationChartStrategyState {
+  strategyAddress: Address
+  strategyName: string | null
+  currentDebt: string
+  currentDebtBps: number
+}
+
+export interface AllocationChartState {
+  blockNumber: number
+  totalAssets: string
+  totalIdle: string | null
+  idleBps: number | null
+  allocations: AllocationChartStrategyState[]
+}
+
+export interface AllocationChartCurrentSnapshot extends AllocationChartState {
+  id: string
+  kind: 'current_snapshot'
+  blockTimestamp: number
+}
+
+export type AllocationChartExpectedAprImpact =
+  | {
+      status: 'available'
+      source: 'doa'
+      scope: 'proposal'
+      baselineAprBps: number
+      proposedAprBps: number
+      deltaAprBps: number
+      policyId: string
+      publishedAt: number
+      relationship: 'applied_in_entry' | 'governing_policy'
+      applicationStatus: AllocationEntryPolicy['application']['status']
+    }
+  | {
+      status: 'unavailable'
+      reason: 'no_matched_doa_policy' | 'policy_apr_unavailable'
+    }
+
+export interface AllocationChartOperation {
+  kind: AllocationEntryOperation['kind']
+  subject: AllocationEntryOperation['subject']
+  changes: AllocationEntryOperation['changes']
+}
+
+export interface AllocationChartEntry {
+  id: string
+  kind: AllocationChartEntryKind
+  startBlock: number
+  endBlock: number
+  startTimestamp: number
+  endTimestamp: number
+  before: AllocationChartState
+  after: AllocationChartState
+  execution: {
+    automation: AllocationHistoryEntry['execution']['automation']
+    mechanism: AllocationHistoryEntry['execution']['mechanism']
+    targetStatus: AllocationHistoryEntry['execution']['targetStatus']
+    transactions: Array<{
+      transactionHash: Hash
+      blockNumber: number
+    }>
+  }
+  expectedAprImpact: AllocationChartExpectedAprImpact
+  operations: AllocationChartOperation[]
+  classification: {
+    confidence: AllocationHistoryEntry['classification']['confidence']
+  }
+  detailsAvailable: true
+  detailsHref: string
+}
+
+export interface VaultAllocationChartResponse {
+  schemaVersion: 2
+  projection: 'chart'
+  generatedAt: number
+  direction: TimelineDirection
+  dataQuality: VaultAllocationHistoryResponse['dataQuality']
+  vault: VaultAllocationVault
+  currentSnapshot: AllocationChartCurrentSnapshot | null
+  entries: AllocationChartEntry[]
+  pagination: VaultAllocationHistoryResponse['pagination']
+}
+
+export interface VaultAllocationHistoryEntryResponse {
+  schemaVersion: 2
+  projection: 'detail'
+  generatedAt: number
+  dataQuality: VaultAllocationHistoryResponse['dataQuality']
+  vault: VaultAllocationVault
+  entry: AllocationHistoryEntry
 }
 
 export interface VaultAllocationVault {

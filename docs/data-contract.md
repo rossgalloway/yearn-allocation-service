@@ -39,6 +39,28 @@ The route does not expose top-level states, transitions, strategy directories, r
 Those remain normalized internally so Kong can eventually expose investigative GraphQL queries without forcing the public REST
 consumer to join objects or make follow-up requests.
 
+### Compact chart projection
+
+`projection=chart` is a materialized subset of the full entry contract. It includes only economic-flow kinds and filters them
+before keyset pagination. The initial page returns the safe-head `currentSnapshot` separately, outside `entries` and `limit`;
+cursor pages return `currentSnapshot: null`.
+
+Each chart entry retains the immediate before/after totals, relevant strategy debt, the three execution axes, deduplicated
+transaction hash/block pairs, compact operations, and classification confidence. Relevant strategies are the union of nonzero
+debt in either state, debt changes, strategy operation subjects, and DOA policy targets. That same address set appears in both
+states, with an absent strategy represented as zero debt.
+
+`idleBps` is a derived archive-RPC value: `floor(totalIdle * 10,000 / totalAssets)`. It is null when either input is unavailable
+or assets are zero. It must not be substituted for `unallocatedBps`, which remains checkpoint-owned.
+
+`expectedAprImpact` is either an explicit unavailable reason or a DOA proposal-scoped estimate. Available values rename the
+already-bps optimizer fields to `baselineAprBps` and `proposedAprBps`, with a signed `deltaAprBps`. `applied_in_entry` requires a
+confirmed application block inside the entry; otherwise an attached policy is `governing_policy`. Historical target inference
+remains visible through `applicationStatus`, not as a temporal relationship.
+
+Chart `detailsHref` values include the immutable run ID. The detail route returns the full stored entry from that run, so a
+later refresh cannot change the evidence behind an already-rendered chart point.
+
 Standalone deposit/withdrawal context, report-only accounting changes, and pure debt updates that only service withdrawals are
 excluded from the default REST entries. Withdrawal context never overrides stronger intent evidence: allocator execution,
 historically confirmed `DEBT_MANAGER` calls, bad-debt handling, and configuration/lifecycle actions remain visible and retain
@@ -145,5 +167,6 @@ The processor always replays from the coverage start, even for older pages, so p
 
 `/api/rest/views/allocation-history/:chainId/:address` defaults to `direction=desc` and keyset-paginates the already materialized
 entries by `(endBlock, id)`. `direction=asc` walks chronologically. When `pagination.nextCursor` is non-null, the client must
-send it back with the same direction. Cursors are opaque, versioned, bound to one projection/run, and rejected when malformed,
-direction-mismatched, out of Postgres bigint range, or no longer retained.
+send it back with the same direction and response projection. Cursors are opaque, versioned, bound to one response
+projection/materialization run, and rejected when malformed, direction- or projection-mismatched, out of Postgres bigint
+range, or no longer retained.

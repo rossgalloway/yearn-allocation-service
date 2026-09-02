@@ -1,9 +1,10 @@
-import type { TimelineDirection } from './types'
+import type { AllocationHistoryProjection, TimelineDirection } from './types'
 
 interface AllocationHistoryCursorPayload {
-  version: 1
+  version: 2
   projectionId: string
   runId: string
+  projection: AllocationHistoryProjection
   direction: TimelineDirection
   endBlock: number
   entryId: string
@@ -33,7 +34,8 @@ export function encodeAllocationHistoryCursor(payload: AllocationHistoryCursorPa
 
 export function decodeAllocationHistoryCursor(
   value: string,
-  expectedDirection: TimelineDirection
+  expectedDirection: TimelineDirection,
+  expectedProjection: AllocationHistoryProjection
 ): AllocationHistoryCursorPayload {
   let parsed: unknown
   try {
@@ -44,9 +46,11 @@ export function decodeAllocationHistoryCursor(
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new AllocationHistoryCursorError()
   const candidate = parsed as Partial<AllocationHistoryCursorPayload>
   if (
-    candidate.version !== 1 ||
+    candidate.version !== 2 ||
     !validIdentifier(candidate.projectionId) ||
     !validIdentifier(candidate.runId) ||
+    (candidate.projection !== 'full' && candidate.projection !== 'chart') ||
+    candidate.projection !== expectedProjection ||
     (candidate.direction !== 'asc' && candidate.direction !== 'desc') ||
     candidate.direction !== expectedDirection ||
     !Number.isSafeInteger(candidate.endBlock) ||

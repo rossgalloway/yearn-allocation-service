@@ -5,6 +5,8 @@ import type { VaultAllocationCoverage } from '@/lib/envio/types'
 import {
   completeMaterializationRun,
   failMaterializationRun,
+  readMaterializedAllocationChart,
+  readMaterializedAllocationEntry,
   readMaterializedAllocationHistory,
   startMaterializationRun
 } from './repository'
@@ -121,6 +123,16 @@ describeDatabase('Postgres allocation history repository', () => {
     const firstPage = await readMaterializedAllocationHistory({ vault, limit: 1, direction: 'desc' })
     expect(firstPage.entries.map((item) => item.id)).toEqual(['current:110'])
     expect(firstPage.pagination.nextCursor).not.toBeNull()
+
+    const chartPage = await readMaterializedAllocationChart({ vault, limit: 1, direction: 'desc' })
+    expect(chartPage.currentSnapshot?.id).toBe('current:110')
+    expect(chartPage.entries.map((item) => item.id)).toEqual(['action:100'])
+    const chartDetail = await readMaterializedAllocationEntry({
+      vault,
+      entryId: chartPage.entries[0].id,
+      runId: firstRun.id
+    })
+    expect(chartDetail).toMatchObject({ projection: 'detail', entry: { id: 'action:100' } })
 
     const secondRun = await startMaterializationRun({ vault, mode: 'refresh' })
     await completeMaterializationRun({

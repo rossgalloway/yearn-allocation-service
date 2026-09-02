@@ -1,7 +1,13 @@
 import type { QueryResult, QueryResultRow } from 'pg'
 import { describe, expect, it } from 'vitest'
 import type { DatabaseQueryable } from '@/lib/database/client'
-import { readMaterializedAllocationHistory } from './repository'
+import { buildAllocationChartPayload } from './chart'
+import {
+  ALLOCATION_MATERIALIZER_VERSION,
+  readMaterializedAllocationChart,
+  readMaterializedAllocationEntry,
+  readMaterializedAllocationHistory
+} from './repository'
 import type { Address, AllocationHistoryEntry } from './types'
 import type { TestVault } from './vaults'
 
@@ -15,7 +21,11 @@ function queryResult<Row extends QueryResultRow>(rows: Row[]): QueryResult<Row> 
   return { command: 'SELECT', rowCount: rows.length, oid: 0, fields: [], rows }
 }
 
-function entry(id: string, block: number): AllocationHistoryEntry {
+function entry(
+  id: string,
+  block: number,
+  kind: AllocationHistoryEntry['kind'] = 'idle_deployment'
+): AllocationHistoryEntry {
   const state = {
     blockNumber: block,
     blockTimestamp: block * 10,
@@ -32,12 +42,12 @@ function entry(id: string, block: number): AllocationHistoryEntry {
   }
   return {
     id,
-    kind: 'idle_deployment',
+    kind,
     startBlock: block,
     endBlock: block,
     startTimestamp: block * 10,
     endTimestamp: block * 10,
-    before: state,
+    before: kind === 'current_snapshot' ? null : state,
     after: state,
     changes: { totalDebtDelta: '0', totalIdleDelta: '0', strategies: [] },
     policy: null,
@@ -55,19 +65,22 @@ function entry(id: string, block: number): AllocationHistoryEntry {
 
 class FakeDatabase implements DatabaseQueryable {
   activeRun = '7'
-  readonly entries = [entry('entry-b', 100), entry('entry-a', 100), entry('entry-c', 90)]
+  constructor(
+    readonly entries: AllocationHistoryEntry[] = [entry('entry-b', 100), entry('entry-a', 100), entry('entry-c', 90)]
+  ) {}
 
   async query<Row extends QueryResultRow = QueryResultRow>(
     text: string,
     values: readonly unknown[] = []
   ): Promise<QueryResult<Row>> {
     if (text.includes('FROM allocation_history_projection p')) {
-      const runId = values.length === 4 ? String(values[3]) : this.activeRun
+      const runId = values.length === 4 ? String(values[3]) : values.length === 3 ? String(values[2]) : this.activeRun
       return queryResult([
         {
           projection_id: '3',
           run_id: runId,
           schema_version: 2,
+          materializer_version: ALLOCATION_MATERIALIZER_VERSION,
           generated_at: '1000',
           coverage_safe_for_timeline: true,
           coverage_known_gaps: [],
@@ -84,12 +97,35 @@ class FakeDatabase implements DatabaseQueryable {
       ])
     }
     if (text.includes('FROM allocation_history_entry')) {
+      if (text.includes("kind = 'current_snapshot'")) {
+        const item = this.entries.find((entry) => entry.kind === 'current_snapshot')
+        const rows = item
+          ? [
+              {
+                entry_id: item.id,
+                end_block: String(item.endBlock),
+                payload: buildAllocationChartPayload(item, vaultPayload(), String(values[0]))
+              } as unknown as Row
+            ]
+          : []
+        return queryResult(rows)
+      }
+      if (text.includes('entry_id = $2')) {
+        const item = this.entries.find((entry) => entry.id === String(values[1]))
+        return queryResult(
+          item ? ([{ entry_id: item.id, end_block: String(item.endBlock), payload: item }] as unknown as Row[]) : []
+        )
+      }
+      const chart = text.includes('chart_payload AS payload')
       const descending = text.includes('ORDER BY end_block DESC')
       const cursorBlock = values.length === 4 ? Number(values[2]) : null
       const cursorId = values.length === 4 ? String(values[3]) : null
       const limit = Number(values[1])
       const rows = this.entries
         .filter((item) => {
+          if (chart && !['idle_deployment', 'idle_deallocation', 'strategy_reallocation'].includes(item.kind)) {
+            return false
+          }
           if (cursorBlock === null || cursorId === null) return true
           const comparison = item.endBlock - cursorBlock || item.id.localeCompare(cursorId)
           return descending ? comparison < 0 : comparison > 0
@@ -99,10 +135,29 @@ class FakeDatabase implements DatabaseQueryable {
           return descending ? -comparison : comparison
         })
         .slice(0, limit)
-        .map((item) => ({ entry_id: item.id, end_block: String(item.endBlock), payload: item }) as unknown as Row)
+        .map(
+          (item) =>
+            ({
+              entry_id: item.id,
+              end_block: String(item.endBlock),
+              payload: chart ? buildAllocationChartPayload(item, vaultPayload(), String(values[0])) : item
+            }) as unknown as Row
+        )
       return queryResult(rows)
     }
     throw new Error(`Unexpected query: ${text}`)
+  }
+}
+
+function vaultPayload() {
+  return {
+    chainId: 1,
+    address: vault.address.toLowerCase() as Address,
+    name: 'Test vault',
+    symbol: 'yvTEST',
+    assetAddress: null,
+    assetSymbol: 'TEST',
+    assetDecimals: 6
   }
 }
 
@@ -127,5 +182,45 @@ describe('materialized allocation history repository', () => {
     const result = await readMaterializedAllocationHistory({ vault, limit: 3, direction: 'asc' }, new FakeDatabase())
 
     expect(result.entries.map((item) => item.id)).toEqual(['entry-c', 'entry-a', 'entry-b'])
+  })
+
+  it('filters chart kinds before limiting and returns the current snapshot separately', async () => {
+    const database = new FakeDatabase([
+      entry('current:110', 110, 'current_snapshot'),
+      entry('config:105', 105, 'configuration_change'),
+      entry('flow:100', 100, 'idle_deployment'),
+      entry('flow:90', 90, 'strategy_reallocation')
+    ])
+
+    const first = await readMaterializedAllocationChart({ vault, limit: 1, direction: 'desc' }, database)
+    expect(first.projection).toBe('chart')
+    expect(first.currentSnapshot?.id).toBe('current:110')
+    expect(first.entries.map((item) => item.id)).toEqual(['flow:100'])
+    expect(first.pagination).toMatchObject({ returned: 1, hasMore: true })
+
+    const second = await readMaterializedAllocationChart(
+      { vault, limit: 1, direction: 'desc', cursor: first.pagination.nextCursor },
+      database
+    )
+    expect(second.currentSnapshot).toBeNull()
+    expect(second.entries.map((item) => item.id)).toEqual(['flow:90'])
+    expect(second.pagination).toMatchObject({ returned: 1, hasMore: false, nextCursor: null })
+
+    await expect(
+      readMaterializedAllocationHistory(
+        { vault, limit: 1, direction: 'desc', cursor: first.pagination.nextCursor },
+        database
+      )
+    ).rejects.toThrow('Invalid allocation history cursor')
+  })
+
+  it('reads run-pinned full entry details', async () => {
+    const result = await readMaterializedAllocationEntry({ vault, entryId: 'entry-a', runId: '7' }, new FakeDatabase())
+
+    expect(result).toMatchObject({
+      schemaVersion: 2,
+      projection: 'detail',
+      entry: { id: 'entry-a' }
+    })
   })
 })

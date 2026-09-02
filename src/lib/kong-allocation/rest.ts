@@ -886,6 +886,7 @@ export function buildRestAllocationHistory(input: {
 
   return {
     schemaVersion: 2,
+    projection: 'full',
     generatedAt: input.timeline.generatedAt,
     direction: input.direction,
     dataQuality: { certification: 'certified', limitations: [] },

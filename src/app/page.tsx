@@ -11,8 +11,8 @@ const endpoints = [
   },
   {
     method: 'GET',
-    path: '/api/rest/views/allocation-history/1/0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204',
-    description: 'Cursor-paginated, chart-ready allocation entries from the active Postgres materialization.'
+    path: '/api/rest/views/allocation-history/1/0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204?projection=chart',
+    description: 'Compact chart entries with a separate current snapshot and run-pinned full-detail links.'
   }
 ]
 

@@ -8,17 +8,22 @@ import {
   withDatabaseTransaction
 } from '@/lib/database/client'
 import type { VaultAllocationCoverage } from '@/lib/envio/types'
+import { buildAllocationChartPayload } from './chart'
 import { AllocationHistoryCursorError, decodeAllocationHistoryCursor, encodeAllocationHistoryCursor } from './cursor'
 import type {
+  AllocationChartCurrentSnapshot,
+  AllocationChartEntry,
   AllocationHistoryEntry,
   TimelineDirection,
+  VaultAllocationChartResponse,
+  VaultAllocationHistoryEntryResponse,
   VaultAllocationHistoryResponse,
   VaultAllocationVault
 } from './types'
 import type { TestVault } from './vaults'
 
 export const ALLOCATION_SCHEMA_VERSION = 2
-export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v1'
+export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v2-chart'
 const DEFAULT_STALE_RUN_SECONDS = 6 * 60 * 60
 const ENTRY_INSERT_BATCH_SIZE = 250
 
@@ -26,16 +31,17 @@ interface ProjectionRow extends QueryResultRow {
   projection_id: string
   run_id: string
   schema_version: number
+  materializer_version: string
   generated_at: string
   coverage_safe_for_timeline: boolean
   coverage_known_gaps: string[] | string
   vault_payload: VaultAllocationVault | string
 }
 
-interface EntryRow extends QueryResultRow {
+interface EntryRow<Payload = AllocationHistoryEntry> extends QueryResultRow {
   entry_id: string
   end_block: string
-  payload: AllocationHistoryEntry | string
+  payload: Payload | string
 }
 
 interface RunRow extends QueryResultRow {
@@ -44,9 +50,16 @@ interface RunRow extends QueryResultRow {
 }
 
 export class AllocationHistoryNotMaterializedError extends Error {
-  constructor() {
-    super('Allocation history has not been materialized for this vault')
+  constructor(message = 'Allocation history has not been materialized for this vault') {
+    super(message)
     this.name = 'AllocationHistoryNotMaterializedError'
+  }
+}
+
+export class AllocationHistoryEntryNotFoundError extends Error {
+  constructor() {
+    super('Allocation history entry was not found')
+    this.name = 'AllocationHistoryEntryNotFoundError'
   }
 }
 
@@ -73,6 +86,7 @@ async function projectionForPage(
        p.id::text AS projection_id,
        r.id::text AS run_id,
        r.schema_version,
+       r.materializer_version,
        r.generated_at::text,
        r.coverage_safe_for_timeline,
        r.coverage_known_gaps,
@@ -103,11 +117,12 @@ export async function readMaterializedAllocationHistory(
   },
   queryable: DatabaseQueryable = databasePool()
 ): Promise<VaultAllocationHistoryResponse> {
-  const cursor = input.cursor ? decodeAllocationHistoryCursor(input.cursor, input.direction) : null
+  const cursor = input.cursor ? decodeAllocationHistoryCursor(input.cursor, input.direction, 'full') : null
   let projection: ProjectionRow
   try {
     projection = await projectionForPage(queryable, input.vault, cursor)
   } catch (error) {
+    if (error instanceof AllocationHistoryCursorError) throw error
     if (error instanceof AllocationHistoryNotMaterializedError) throw error
     if (error instanceof DatabaseUpstreamError) throw error
     throw new DatabaseUpstreamError('Unable to read the active allocation materialization', { cause: error })
@@ -147,9 +162,10 @@ export async function readMaterializedAllocationHistory(
   const nextCursor =
     hasMore && last
       ? encodeAllocationHistoryCursor({
-          version: 1,
+          version: 2,
           projectionId: projection.projection_id,
           runId: projection.run_id,
+          projection: 'full',
           direction: input.direction,
           endBlock: Number(last.end_block),
           entryId: last.entry_id
@@ -158,6 +174,7 @@ export async function readMaterializedAllocationHistory(
 
   return {
     schemaVersion: ALLOCATION_SCHEMA_VERSION,
+    projection: 'full',
     generatedAt: Number(projection.generated_at),
     direction: input.direction,
     dataQuality: {
@@ -172,6 +189,201 @@ export async function readMaterializedAllocationHistory(
       hasMore,
       nextCursor
     }
+  }
+}
+
+function projectionLimitations(projection: ProjectionRow): string[] {
+  const limitations = jsonObject(projection.coverage_known_gaps, 'coverage limitations')
+  if (!Array.isArray(limitations) || !limitations.every((item) => typeof item === 'string')) {
+    throw new DatabaseUpstreamError('Postgres returned invalid coverage limitations JSON')
+  }
+  return limitations
+}
+
+export async function readMaterializedAllocationChart(
+  input: {
+    vault: TestVault
+    limit: number
+    direction: TimelineDirection
+    cursor?: string | null
+  },
+  queryable: DatabaseQueryable = databasePool()
+): Promise<VaultAllocationChartResponse> {
+  const cursor = input.cursor ? decodeAllocationHistoryCursor(input.cursor, input.direction, 'chart') : null
+  let projection: ProjectionRow
+  try {
+    projection = await projectionForPage(queryable, input.vault, cursor)
+  } catch (error) {
+    if (error instanceof AllocationHistoryCursorError) throw error
+    if (error instanceof AllocationHistoryNotMaterializedError) throw error
+    if (error instanceof DatabaseUpstreamError) throw error
+    throw new DatabaseUpstreamError('Unable to read the active allocation chart materialization', { cause: error })
+  }
+  if (projection.materializer_version !== ALLOCATION_MATERIALIZER_VERSION) {
+    throw new AllocationHistoryNotMaterializedError(
+      'Allocation chart projection has not been materialized for this vault'
+    )
+  }
+
+  const comparison = input.direction === 'desc' ? '<' : '>'
+  const order = input.direction === 'desc' ? 'DESC' : 'ASC'
+  const values: unknown[] = [projection.run_id, input.limit + 1]
+  let cursorClause = ''
+  if (cursor) {
+    values.push(cursor.endBlock, cursor.entryId)
+    cursorClause = `AND (end_block, entry_id) ${comparison} ($3::bigint, $4::text)`
+  }
+
+  let result: QueryResult<EntryRow<AllocationChartEntry>>
+  let currentSnapshot: AllocationChartCurrentSnapshot | null = null
+  try {
+    result = await queryable.query<EntryRow<AllocationChartEntry>>(
+      `SELECT entry_id, end_block::text, chart_payload AS payload
+       FROM allocation_history_entry
+       WHERE run_id = $1::bigint
+         AND kind IN ('idle_deployment', 'idle_deallocation', 'strategy_reallocation')
+         AND chart_payload IS NOT NULL
+         ${cursorClause}
+       ORDER BY end_block ${order}, entry_id ${order}
+       LIMIT $2`,
+      values
+    )
+    if (!cursor) {
+      const snapshot = await queryable.query<EntryRow<AllocationChartCurrentSnapshot>>(
+        `SELECT entry_id, end_block::text, chart_payload AS payload
+         FROM allocation_history_entry
+         WHERE run_id = $1::bigint
+           AND kind = 'current_snapshot'
+           AND chart_payload IS NOT NULL
+         LIMIT 1`,
+        [projection.run_id]
+      )
+      if (!snapshot.rows[0]) {
+        throw new AllocationHistoryNotMaterializedError(
+          'Allocation chart current snapshot has not been materialized for this vault'
+        )
+      }
+      currentSnapshot = jsonObject(snapshot.rows[0].payload, 'allocation chart current snapshot')
+    }
+  } catch (error) {
+    if (error instanceof AllocationHistoryNotMaterializedError) throw error
+    throw new DatabaseUpstreamError('Unable to read materialized allocation chart entries', { cause: error })
+  }
+
+  const hasMore = result.rows.length > input.limit
+  const selected = result.rows.slice(0, input.limit)
+  const entries = selected.map((row) => jsonObject(row.payload, 'allocation chart entry'))
+  const last = selected.at(-1)
+  const nextCursor =
+    hasMore && last
+      ? encodeAllocationHistoryCursor({
+          version: 2,
+          projectionId: projection.projection_id,
+          runId: projection.run_id,
+          projection: 'chart',
+          direction: input.direction,
+          endBlock: Number(last.end_block),
+          entryId: last.entry_id
+        })
+      : null
+
+  return {
+    schemaVersion: ALLOCATION_SCHEMA_VERSION,
+    projection: 'chart',
+    generatedAt: Number(projection.generated_at),
+    direction: input.direction,
+    dataQuality: {
+      certification: projection.coverage_safe_for_timeline ? 'certified' : 'provisional',
+      limitations: projectionLimitations(projection)
+    },
+    vault: jsonObject(projection.vault_payload, 'vault metadata'),
+    currentSnapshot,
+    entries,
+    pagination: {
+      limit: input.limit,
+      returned: entries.length,
+      hasMore,
+      nextCursor
+    }
+  }
+}
+
+async function projectionForEntry(
+  queryable: DatabaseQueryable,
+  vault: TestVault,
+  runId: string | null
+): Promise<ProjectionRow> {
+  const values = runId
+    ? [vault.chainId, vault.address.toLowerCase(), runId]
+    : [vault.chainId, vault.address.toLowerCase()]
+  const where = runId ? 'r.id = $3::bigint' : 'r.id = p.active_run_id'
+  const result = await queryable.query<ProjectionRow>(
+    `SELECT
+       p.id::text AS projection_id,
+       r.id::text AS run_id,
+       r.schema_version,
+       r.materializer_version,
+       r.generated_at::text,
+       r.coverage_safe_for_timeline,
+       r.coverage_known_gaps,
+       r.vault_payload
+     FROM allocation_history_projection p
+     JOIN allocation_history_run r ON r.projection_id = p.id
+     WHERE p.chain_id = $1
+       AND p.vault_address = $2
+       AND ${where}
+       AND r.status = 'succeeded'
+     LIMIT 1`,
+    values
+  )
+  const row = result.rows[0]
+  if (!row && runId) throw new AllocationHistoryEntryNotFoundError()
+  if (row?.schema_version !== ALLOCATION_SCHEMA_VERSION || row.generated_at === null || row.vault_payload === null) {
+    throw new AllocationHistoryNotMaterializedError()
+  }
+  return row
+}
+
+export async function readMaterializedAllocationEntry(
+  input: {
+    vault: TestVault
+    entryId: string
+    runId?: string | null
+  },
+  queryable: DatabaseQueryable = databasePool()
+): Promise<VaultAllocationHistoryEntryResponse> {
+  let projection: ProjectionRow
+  try {
+    projection = await projectionForEntry(queryable, input.vault, input.runId ?? null)
+    const result = await queryable.query<EntryRow>(
+      `SELECT entry_id, end_block::text, payload
+       FROM allocation_history_entry
+       WHERE run_id = $1::bigint AND entry_id = $2
+       LIMIT 1`,
+      [projection.run_id, input.entryId]
+    )
+    const row = result.rows[0]
+    if (!row) throw new AllocationHistoryEntryNotFoundError()
+    return {
+      schemaVersion: ALLOCATION_SCHEMA_VERSION,
+      projection: 'detail',
+      generatedAt: Number(projection.generated_at),
+      dataQuality: {
+        certification: projection.coverage_safe_for_timeline ? 'certified' : 'provisional',
+        limitations: projectionLimitations(projection)
+      },
+      vault: jsonObject(projection.vault_payload, 'vault metadata'),
+      entry: jsonObject(row.payload, 'allocation entry')
+    }
+  } catch (error) {
+    if (
+      error instanceof AllocationHistoryEntryNotFoundError ||
+      error instanceof AllocationHistoryNotMaterializedError ||
+      error instanceof DatabaseUpstreamError
+    ) {
+      throw error
+    }
+    throw new DatabaseUpstreamError('Unable to read materialized allocation entry', { cause: error })
   }
 }
 
@@ -323,12 +535,13 @@ export async function completeMaterializationRun(input: {
         end_block: entry.endBlock,
         start_timestamp: entry.startTimestamp,
         end_timestamp: entry.endTimestamp,
-        payload: entry
+        payload: entry,
+        chart_payload: buildAllocationChartPayload(entry, input.vault, input.run.id)
       }))
       await client.query(
         `INSERT INTO allocation_history_entry (
            run_id, entry_id, kind, start_block, end_block,
-           start_timestamp, end_timestamp, payload
+           start_timestamp, end_timestamp, payload, chart_payload
          )
          SELECT
            $1::bigint,
@@ -338,7 +551,8 @@ export async function completeMaterializationRun(input: {
            item.end_block,
            item.start_timestamp,
            item.end_timestamp,
-           item.payload
+           item.payload,
+           item.chart_payload
          FROM jsonb_to_recordset($2::jsonb) AS item(
            entry_id text,
            kind text,
@@ -346,7 +560,8 @@ export async function completeMaterializationRun(input: {
            end_block bigint,
            start_timestamp bigint,
            end_timestamp bigint,
-           payload jsonb
+           payload jsonb,
+           chart_payload jsonb
          )`,
         [input.run.id, JSON.stringify(page)]
       )

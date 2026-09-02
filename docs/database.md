@@ -38,14 +38,17 @@ The named Docker volume survives `bun run db:down`. Use an explicit provider URL
 ## Schema and activation
 
 `allocation_history_projection` identifies one chain/vault read model. A background job builds a complete
-`allocation_history_run` and its denormalized `allocation_history_entry` rows in isolation. Completion validates the coverage
-contract, accounting checks, vault identity, block bounds, unique entry IDs, and exactly one safe-head `current_snapshot`.
+`allocation_history_run` and its denormalized `allocation_history_entry` rows in isolation. Every chartable row stores both its
+full evidence payload and its compact `chart_payload`; pure configuration/lifecycle rows keep only the full payload. Completion
+validates the coverage contract, accounting checks, vault identity, block bounds, unique entry IDs, and exactly one safe-head
+`current_snapshot` with its compact chart state.
 Only then does the same transaction mark the run successful and change the projection's active pointer. In explicit test mode,
 the same validation and atomic activation apply, but the run may be provisional when its non-empty limitations explain the
 missing certification evidence.
 
-A failed refresh leaves the prior active run untouched. Cursors contain the projection ID, run ID, direction, and last keyset
-position, so an in-progress traversal continues against the older immutable run after a new run activates.
+A failed refresh leaves the prior active run untouched. Cursors contain the database projection ID, run ID, response projection,
+direction, and last keyset position, so an in-progress traversal continues against the older immutable run after a new run
+activates. Chart detail links also include the run ID for the same reason.
 
 ## Initial rollout
 
@@ -93,8 +96,9 @@ interrupted and replaced on the next attempt.
 truncated history. The default is 250,000 events. Public REST pages remain limited to 100 entries and traverse larger histories
 with `nextCursor`.
 
-The prototype retains prior successful runs because issued cursors refer to them. Production Kong still needs an incremental
-tail algorithm and a retention window tied to cursor expiry before old runs can be deleted safely.
+The prototype retains prior successful runs because issued cursors and chart detail links refer to them. Production Kong still
+needs an incremental tail algorithm and a retention window tied to cursor/detail-link expiry before old runs can be deleted
+safely.
 
 ## Verification
 

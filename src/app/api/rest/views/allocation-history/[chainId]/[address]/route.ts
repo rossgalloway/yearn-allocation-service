@@ -6,8 +6,8 @@ import { json, options } from '@/lib/http'
 import { AllocationHistoryCursorError } from '@/lib/kong-allocation/cursor'
 import { AllocationHistoryNotMaterializedError } from '@/lib/kong-allocation/repository'
 import { ArchiveRpcConfigurationError, ArchiveRpcUpstreamError } from '@/lib/kong-allocation/rpc'
-import { getKongAllocationHistory } from '@/lib/kong-allocation/service'
-import type { TimelineDirection } from '@/lib/kong-allocation/types'
+import { getKongAllocationChart, getKongAllocationHistory } from '@/lib/kong-allocation/service'
+import type { AllocationHistoryProjection, TimelineDirection } from '@/lib/kong-allocation/types'
 import { findTestVault } from '@/lib/kong-allocation/vaults'
 
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/
@@ -25,6 +25,11 @@ function parsePositiveInteger(value: string): number | null {
 function direction(value: string | null): TimelineDirection | null {
   if (value === null) return 'desc'
   return value === 'asc' || value === 'desc' ? value : null
+}
+
+function projection(value: string | null): AllocationHistoryProjection | null {
+  if (value === null) return 'full'
+  return value === 'full' || value === 'chart' ? value : null
 }
 
 function upstreamFailure(error: unknown): { status: number; message: string } {
@@ -67,18 +72,17 @@ export async function GET(request: Request, context: { params: Promise<{ chainId
   }
   const selectedDirection = direction(url.searchParams.get('direction'))
   if (selectedDirection === null) return json({ error: 'direction must be asc or desc' }, { status: 400 })
+  const selectedProjection = projection(url.searchParams.get('projection'))
+  if (selectedProjection === null) return json({ error: 'projection must be full or chart' }, { status: 400 })
   const cursor = url.searchParams.get('cursor')
   if (cursor !== null && (cursor.length === 0 || cursor.length > 2_048)) {
     return json({ error: 'cursor is invalid' }, { status: 400 })
   }
 
   try {
-    const history = await getKongAllocationHistory({
-      vault,
-      limit: parsedLimit,
-      direction: selectedDirection,
-      cursor
-    })
+    const input = { vault, limit: parsedLimit, direction: selectedDirection, cursor }
+    const history =
+      selectedProjection === 'chart' ? await getKongAllocationChart(input) : await getKongAllocationHistory(input)
     return json(history, {
       cacheControl:
         history.dataQuality.certification === 'provisional'

@@ -18,7 +18,11 @@ import { AllocationHistoryCursorError } from './cursor'
 import { processDoa } from './doa'
 import { fetchCompleteKongAllocationEvents, fetchKongAllocationEvents, isAllocationTransitionEvent } from './envio'
 import { materializeStates, type StateBlock } from './materialize'
-import { readMaterializedAllocationHistory } from './repository'
+import {
+  readMaterializedAllocationChart,
+  readMaterializedAllocationEntry,
+  readMaterializedAllocationHistory
+} from './repository'
 import { buildRestAllocationEntries, buildRestAllocationHistory } from './rest'
 import {
   type AllocatorTriggerReplayInput,
@@ -38,6 +42,8 @@ import type {
   NormalizedAllocationTimeline,
   RpcTransactionContext,
   TimelineDirection,
+  VaultAllocationChartResponse,
+  VaultAllocationHistoryEntryResponse,
   VaultAllocationHistoryResponse
 } from './types'
 import type { TestVault } from './vaults'
@@ -747,6 +753,31 @@ export async function getKongAllocationHistory(input: {
     historyCache.delete(key)
     throw error
   }
+}
+
+export async function getKongAllocationChart(input: {
+  vault: TestVault
+  limit: number
+  direction: TimelineDirection
+  cursor?: string | null
+}): Promise<VaultAllocationChartResponse> {
+  const configuredSource = process.env.ALLOCATION_HISTORY_SOURCE?.trim().toLowerCase() || 'live'
+  if (configuredSource !== 'database') {
+    throw new DatabaseConfigurationError('The chart projection requires the Postgres allocation history read model')
+  }
+  return readMaterializedAllocationChart(input)
+}
+
+export async function getKongAllocationHistoryEntry(input: {
+  vault: TestVault
+  entryId: string
+  runId?: string | null
+}): Promise<VaultAllocationHistoryEntryResponse> {
+  const configuredSource = process.env.ALLOCATION_HISTORY_SOURCE?.trim().toLowerCase() || 'live'
+  if (configuredSource !== 'database') {
+    throw new DatabaseConfigurationError('Allocation history entry details require the Postgres read model')
+  }
+  return readMaterializedAllocationEntry(input)
 }
 
 export function clearKongAllocationHistoryCache(): void {
