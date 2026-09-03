@@ -150,7 +150,7 @@ GraphQL may be slower and more flexible than REST, but it must not run a separat
 Lives at `packages/web/app/api/rest/views/allocation-history/[chainId]/[address]/route.ts`. Behaves like other Kong REST endpoints:
 
 - Reads the active immutable materialization run from Kong storage and returns a keyset-paginated, denormalized `entries` array
-- `projection=chart` returns only chart-relevant economic actions, a separate current snapshot, expected APR information when available, and reconciled interval flows
+- `projection=chart` returns only visible strategy reallocations, a separate current snapshot, expected APR information when available, and reconciled intervals containing all hidden activity between those visible points
 - `/entries/:entryId?runId=...` returns the full evidence-rich entry for a chart item
 - Same `Cache-Control` posture as existing REST routes (`max-age=900, s-maxage=900, stale-while-revalidate=600`)
 - Provisional test data is marked clearly and uses `Cache-Control: no-store`; production Kong remains certified-only by default
@@ -634,10 +634,12 @@ type VaultAllocationChartResponse = {
   generatedAt: number
   direction: 'asc' | 'desc'
   dataQuality: AllocationDataQuality
-  vault: VaultAllocationVault
-  currentSnapshot: AllocationChartEntry
+  vault: Pick<VaultAllocationVault, 'chainId' | 'address' | 'name'>
+  strategies: Record<Address, string | null>
+  boundaryStates: Record<string, AllocationChartState>
+  currentSnapshot: AllocationChartCurrentSnapshot
   entries: AllocationChartEntry[]
-  pagination: AllocationPagination
+  pagination: { nextCursor: string | null }
 }
 
 type AllocationRestEntry = AllocationAction & {
@@ -651,16 +653,42 @@ type AllocationRestEntry = AllocationAction & {
 
 type AllocationChartEntry = {
   id: string
-  kind: 'idle_deployment' | 'idle_deallocation' | 'strategy_reallocation' | 'current_snapshot'
-  startBlock: number
+  kind: 'strategy_reallocation'
   endBlock: number
-  before: AllocationState | null
-  after: AllocationState
-  execution: AllocationExecution
+  endTimestamp: number
+  after: AllocationChartState
+  execution: Pick<AllocationExecution, 'automation' | 'mechanism' | 'targetStatus'>
   expectedAprImpact: ExpectedAprImpact
-  interval: AllocationInterval | null
-  detailsAvailable: boolean
-  detailsHref: string | null
+  interval: AllocationChartInterval | null
+  detailsHref: string
+}
+
+type AllocationChartCurrentSnapshot = AllocationChartState & {
+  id: string
+  kind: 'current_snapshot'
+  interval: AllocationChartInterval | null
+}
+
+type AllocationChartState = {
+  blockNumber: number
+  blockTimestamp: number
+  totalAssets: string
+  totalIdle: string | null
+  allocations: Array<{ strategyAddress: Address; currentDebt: string }>
+}
+
+type AllocationChartInterval = {
+  fromEntryId: string
+  toEntryId: string | null
+  endKind: 'allocation_entry' | 'safe_head'
+  flows: Array<Omit<AllocationFlow, 'source' | 'target'> & {
+    source: Omit<AllocationNode, 'name'>
+    target: Omit<AllocationNode, 'name'>
+  }>
+  reconciliation: Pick<
+    AllocationInterval['reconciliation'],
+    'balanceStatus' | 'attributionStatus' | 'unattributedAmount'
+  >
 }
 
 type ExpectedAprImpact =

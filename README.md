@@ -94,27 +94,26 @@ the complete materialized history. The opaque cursor pins the immutable run, dir
 first page, so a refresh cannot reorder or skip entries mid-traversal and a chart cursor cannot be used with the full response.
 Raw events are deliberately not exposed by this REST route; they belong in the future Kong GraphQL detail surface.
 
-Pass `projection=chart` for the compact website-hydration shape. The database filters before applying `limit`, so chart pages
-contain only `idle_deployment`, `idle_deallocation`, and `strategy_reallocation` entries. The initial page returns the safe-head
-state separately as `currentSnapshot`; cursor pages set it to null. Chart states include exact `totalIdle` and a derived
-`idleBps = floor(totalIdle * 10,000 / totalAssets)`, which remains distinct from checkpoint-owned `unallocatedBps`.
+Pass `projection=chart` for the lean website-hydration shape. The database filters before applying `limit`, so chart pages
+contain only visible `strategy_reallocation` entries. Deposits, withdrawals, reports, and idle movements remain included in the
+interval ledger between those visible points. The initial page returns the safe-head state separately as `currentSnapshot`;
+cursor pages set it to null.
 
-The chart projection keeps only relevant strategies, compact transaction identifiers, structured operation summaries, and
-classification confidence. `expectedAprImpact` labels DOA baseline/proposed APRs as proposal-scoped expectations and states
-whether the policy was applied in the entry or was already governing it. Missing policy/APR data is an explicit unavailable
-variant. Each chart entry links to a run-pinned full-detail route under `/entries/:entryId?runId=...`.
+Chart states retain exact raw `totalAssets`, `totalIdle`, and strategy `currentDebt`. Derived BPS values are intentionally
+omitted so the client has one rounding path. Strategy names are deduplicated into the response-level `strategies` dictionary.
+Each entry keeps the three execution axes, proposal-scoped `expectedAprImpact`, and a run-pinned `detailsHref`; transaction,
+operation, classification, and atomic before-state evidence remain available from that detail route.
 
-Every chart entry after the oldest history point also embeds a materialized interval ledger from the preceding chart entry's
-`after` state to its own `after` state. The current snapshot carries the tail interval with `toEntryId: null` and
-`endKind: "safe_head"`. Ledger amounts are raw underlying units. Literal deposits, withdrawals, and report refunds use the
-`external` boundary node; reported gains and losses use the non-custodial `accounting` boundary node. Debt updates are marked as
-derived, and idle round trips may be collapsed into strategy-to-strategy flows.
+Every chart interval identifies its boundary entries with `fromEntryId` and `toEntryId` instead of repeating both states.
+`boundaryStates` supplies a referenced state that falls outside the current cursor page. The current snapshot carries the tail
+interval with `toEntryId: null` and `endKind: "safe_head"`. Ledger amounts are raw underlying units. Literal deposits,
+withdrawals, and report refunds use the `external` boundary node; reported gains and losses use the non-custodial `accounting`
+boundary node. Debt updates are derived, and idle round trips may collapse into strategy-to-strategy flows.
 
-Reconciliation is checked independently for idle and every strategy with a nonzero boundary balance or interval flow.
-`balanceStatus` proves that the ledger reproduces all closing balances, while `attributionStatus` says whether any balancing
-flow remained unattributed. `unattributedAmount` is exactly the sum of `unattributed_asset_change` flow amounts, and each
-`residuals` row exposes the complete per-node equation.
-External and accounting nodes are sources or sinks, not balances whose holdings this API claims to know.
+The materializer still validates the complete per-node equations before activation. The chart response keeps only
+`balanceStatus`, `attributionStatus`, and the exact sum of `unattributed_asset_change` amounts as `unattributedAmount`; full
+residual equations remain in the stored detail evidence. Chart pagination returns only `nextCursor`. Clients that advertise
+`Accept-Encoding: gzip` receive compressed JSON.
 
 Envio `Deposit` and `Withdraw` rows are context rather than allocation intent. Pure debt updates that only service withdrawals
 do not consume space in the public entries array. If the same transaction or block contains allocator execution, a confirmed

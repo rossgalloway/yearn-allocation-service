@@ -41,17 +41,15 @@ consumer to join objects or make follow-up requests.
 
 ### Compact chart projection
 
-`projection=chart` is a materialized subset of the full entry contract. It includes only economic-flow kinds and filters them
-before keyset pagination. The initial page returns the safe-head `currentSnapshot` separately, outside `entries` and `limit`;
-cursor pages return `currentSnapshot: null`.
+`projection=chart` is a materialized subset of the full entry contract. It filters to visible `strategy_reallocation` entries
+before keyset pagination. Hidden deposits, withdrawals, reports, idle deployments, and idle deallocations remain part of the
+flow ledger between those visible points. The initial page returns the safe-head `currentSnapshot` separately, outside
+`entries` and `limit`; cursor pages return `currentSnapshot: null`.
 
-Each chart entry retains the immediate before/after totals, relevant strategy debt, the three execution axes, deduplicated
-transaction hash/block pairs, compact operations, and classification confidence. Relevant strategies are the union of nonzero
-debt in either state, debt changes, strategy operation subjects, and DOA policy targets. That same address set appears in both
-states, with an absent strategy represented as zero debt.
-
-`idleBps` is a derived archive-RPC value: `floor(totalIdle * 10,000 / totalAssets)`. It is null when either input is unavailable
-or assets are zero. It must not be substituted for `unallocatedBps`, which remains checkpoint-owned.
+Each chart entry retains its after state in raw units, the three execution axes, proposal-scoped expected APR, and a run-pinned
+detail link. Atomic before states, start metadata, transaction lists, operations, and classification evidence remain in the
+detail projection. Derived `idleBps` and `currentDebtBps` are omitted so consumers calculate percentages from one exact set of
+`totalAssets`, `totalIdle`, and `currentDebt` values. Strategy names are deduplicated into a response-level address dictionary.
 
 `expectedAprImpact` is either an explicit unavailable reason or a DOA proposal-scoped estimate. Available values rename the
 already-bps optimizer fields to `baselineAprBps` and `proposedAprBps`, with a signed `deltaAprBps`. `applied_in_entry` requires a
@@ -63,10 +61,11 @@ later refresh cannot change the evidence behind an already-rendered chart point.
 
 #### Interval flow ledger
 
-The chart payload materializes an `interval` on every chart entry except the oldest one. Its boundaries are the previous chart
-entry's `after` state and the current entry's `after` state, identified by `fromEntryId` and `toEntryId`. The current snapshot
-may carry the final interval from the latest entry to the safe head; that interval uses `toEntryId: null` and
-`endKind: "safe_head"`.
+The chart payload materializes an `interval` on every strategy reallocation except the oldest one. Its boundaries are the
+previous visible entry's `after` state and the current entry's `after` state, identified by `fromEntryId` and `toEntryId`. The
+states are not repeated inside the interval. `boundaryStates` supplies a referenced entry state that is outside the current
+cursor page. The current snapshot may carry the final interval from the latest entry to the safe head; that interval uses
+`toEntryId: null` and `endKind: "safe_head"`.
 
 All flow amounts are decimal strings in raw underlying asset units. `Deposit` and `Withdraw` supply literal external flows.
 `StrategyReported` gains and losses use an `accounting` source/sink because they change book value without implying an ERC-20
@@ -88,10 +87,10 @@ opening balance
 ```
 
 `external` and `accounting` are boundary source/sink nodes; the API does not claim to know their balances. `balanceStatus` is
-`reconciled` only when every per-node final `residualAmount` is zero. Any remaining evidence gap becomes an explicit
+`reconciled` only when every per-node final residual is zero. Any remaining evidence gap becomes an explicit
 `unattributed_asset_change` against the accounting boundary, which keeps the balance equation exact but sets
-`attributionStatus: "partial"`. `unattributedAmount` is defined as the sum of the amounts of those unattributed flow records.
-The `residuals` array lists the opening, closing, attributed, unattributed, and final residual terms for every checked node.
+`attributionStatus: "partial"`. `unattributedAmount` is the sum of those unattributed flow amounts. The materializer validates
+and retains the complete equations, while the lean chart response omits successful residual rows and detailed total fields.
 
 Standalone deposit/withdrawal context, report-only accounting changes, and pure debt updates that only service withdrawals are
 excluded from the default REST entries. Withdrawal context never overrides stronger intent evidence: allocator execution,

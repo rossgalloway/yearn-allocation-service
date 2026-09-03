@@ -171,12 +171,14 @@ GET /api/rest/views/allocation-history/:chainId/:address?projection=chart
 GET /api/rest/views/allocation-history/:chainId/:address/entries/:entryId?runId=...
 ```
 
-REST returns complete entries with embedded before and after states, strategy changes, transaction summaries, execution
-information, relevant policy information, and classification confidence.
+The full REST projection returns complete entries with embedded before and after states, strategy changes, transactions,
+execution information, relevant policies, and classification evidence.
 
-The compact chart projection returns the main economic actions, current snapshot, expected APR when available, and reconciled
-interval flows. Deposits, withdrawals, reports, and pure withdrawal servicing do not fill the public timeline, but their data
-is still used to explain actions and intervals.
+The compact chart projection returns only visible strategy reallocations, their raw after states, the current snapshot,
+execution labels, expected APR when available, and reconciled interval flows. Deposits, withdrawals, reports, and idle
+movements do not fill the chart timeline, but their data is still used inside the intervals between visible points. Strategy
+names and cursor-page boundary states are deduplicated at the response level. Detailed evidence remains available through each
+entry's detail link.
 
 Entries are newest first by default. Stable cursors keep pagination on one materialization run.
 

@@ -117,8 +117,25 @@ describeDatabase('Postgres allocation history repository', () => {
       safeBlock: { blockNumber: 110, blockTimestamp: 1_100 },
       coverage,
       vault: vaultPayload,
-      entries: [entry('action:100', 100, 'idle_deployment'), entry('current:110', 110, 'current_snapshot')]
+      entries: [
+        entry('action:90', 90, 'strategy_reallocation'),
+        entry('action:100', 100, 'strategy_reallocation'),
+        entry('current:110', 110, 'current_snapshot')
+      ]
     })
+
+    const storedEntries = await databasePool().query<{ entry_id: string; end_block: string }>(
+      `SELECT entry_id, end_block::text
+       FROM allocation_history_entry
+       WHERE run_id = $1::bigint
+       ORDER BY allocation_history_entry.end_block DESC, entry_id DESC`,
+      [firstRun.id]
+    )
+    expect(storedEntries.rows.map((row) => [row.entry_id, row.end_block])).toEqual([
+      ['current:110', '110'],
+      ['action:100', '100'],
+      ['action:90', '90']
+    ])
 
     const firstPage = await readMaterializedAllocationHistory({ vault, limit: 1, direction: 'desc' })
     expect(firstPage.entries.map((item) => item.id)).toEqual(['current:110'])
@@ -133,12 +150,23 @@ describeDatabase('Postgres allocation history repository', () => {
       reconciliation: { balanceStatus: 'reconciled', attributionStatus: 'complete', unattributedAmount: '0' }
     })
     expect(chartPage.entries.map((item) => item.id)).toEqual(['action:100'])
+    expect(Object.keys(chartPage.boundaryStates)).toEqual(['action:90'])
+    expect(chartPage.boundaryStates['action:90']?.blockNumber).toBe(90)
+    expect(chartPage.pagination.nextCursor).not.toBeNull()
     const chartDetail = await readMaterializedAllocationEntry({
       vault,
       entryId: chartPage.entries[0].id,
       runId: firstRun.id
     })
-    expect(chartDetail).toMatchObject({ projection: 'detail', entry: { id: 'action:100' } })
+    expect(chartDetail).toMatchObject({
+      projection: 'detail',
+      entry: { id: 'action:100' },
+      interval: {
+        fromEntryId: 'action:90',
+        toEntryId: 'action:100',
+        reconciliation: { balanceStatus: 'reconciled' }
+      }
+    })
 
     const secondRun = await startMaterializationRun({ vault, mode: 'refresh' })
     await completeMaterializationRun({

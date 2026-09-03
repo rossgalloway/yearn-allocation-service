@@ -2,6 +2,7 @@ import type { QueryResult, QueryResultRow } from 'pg'
 import { describe, expect, it } from 'vitest'
 import type { DatabaseQueryable } from '@/lib/database/client'
 import { buildAllocationChartPayload } from './chart'
+import { buildAllocationFlowIntervals } from './flow-ledger'
 import {
   ALLOCATION_MATERIALIZER_VERSION,
   readMaterializedAllocationChart,
@@ -65,9 +66,12 @@ function entry(
 
 class FakeDatabase implements DatabaseQueryable {
   activeRun = '7'
+  readonly intervals: ReturnType<typeof buildAllocationFlowIntervals>
   constructor(
     readonly entries: AllocationHistoryEntry[] = [entry('entry-b', 100), entry('entry-a', 100), entry('entry-c', 90)]
-  ) {}
+  ) {
+    this.intervals = buildAllocationFlowIntervals({ entries, events: [], vaultAddress: vault.address })
+  }
 
   async query<Row extends QueryResultRow = QueryResultRow>(
     text: string,
@@ -104,26 +108,65 @@ class FakeDatabase implements DatabaseQueryable {
               {
                 entry_id: item.id,
                 end_block: String(item.endBlock),
-                payload: buildAllocationChartPayload(item, vaultPayload(), String(values[0]))
+                payload: buildAllocationChartPayload(
+                  item,
+                  vaultPayload(),
+                  String(values[0]),
+                  this.intervals.get(item.id)
+                )
               } as unknown as Row
             ]
           : []
         return queryResult(rows)
       }
+      if (text.includes('entry_id = ANY')) {
+        const ids = new Set(values[1] as string[])
+        return queryResult(
+          this.entries
+            .filter((item) => ids.has(item.id) && item.kind === 'strategy_reallocation')
+            .map(
+              (item) =>
+                ({
+                  entry_id: item.id,
+                  end_block: String(item.endBlock),
+                  payload: buildAllocationChartPayload(
+                    item,
+                    vaultPayload(),
+                    String(values[0]),
+                    this.intervals.get(item.id)
+                  )
+                }) as unknown as Row
+            )
+        )
+      }
       if (text.includes('entry_id = $2')) {
         const item = this.entries.find((entry) => entry.id === String(values[1]))
         return queryResult(
-          item ? ([{ entry_id: item.id, end_block: String(item.endBlock), payload: item }] as unknown as Row[]) : []
+          item
+            ? ([
+                {
+                  entry_id: item.id,
+                  end_block: String(item.endBlock),
+                  payload: item,
+                  chart_payload: buildAllocationChartPayload(
+                    item,
+                    vaultPayload(),
+                    String(values[0]),
+                    this.intervals.get(item.id)
+                  )
+                }
+              ] as unknown as Row[])
+            : []
         )
       }
       const chart = text.includes('chart_payload AS payload')
-      const descending = text.includes('ORDER BY end_block DESC')
+      const descending = /ORDER BY (?:e\.)?end_block DESC/.test(text)
       const cursorBlock = values.length === 4 ? Number(values[2]) : null
       const cursorId = values.length === 4 ? String(values[3]) : null
       const limit = Number(values[1])
       const rows = this.entries
         .filter((item) => {
-          if (chart && !['idle_deployment', 'idle_deallocation', 'strategy_reallocation'].includes(item.kind)) {
+          if (chart && item.kind !== 'strategy_reallocation') {
             return false
           }
           if (cursorBlock === null || cursorId === null) return true
@@ -140,7 +183,9 @@ class FakeDatabase implements DatabaseQueryable {
             ({
               entry_id: item.id,
               end_block: String(item.endBlock),
-              payload: chart ? buildAllocationChartPayload(item, vaultPayload(), String(values[0])) : item
+              payload: chart
+                ? buildAllocationChartPayload(item, vaultPayload(), String(values[0]), this.intervals.get(item.id))
+                : item
             }) as unknown as Row
         )
       return queryResult(rows)
@@ -189,22 +234,27 @@ describe('materialized allocation history repository', () => {
       entry('current:110', 110, 'current_snapshot'),
       entry('config:105', 105, 'configuration_change'),
       entry('flow:100', 100, 'idle_deployment'),
-      entry('flow:90', 90, 'strategy_reallocation')
+      entry('flow:90', 90, 'strategy_reallocation'),
+      entry('flow:80', 80, 'strategy_reallocation')
     ])
 
     const first = await readMaterializedAllocationChart({ vault, limit: 1, direction: 'desc' }, database)
     expect(first.projection).toBe('chart')
+    expect(first.vault).toEqual({ chainId: 1, address: vault.address, name: 'Test vault' })
     expect(first.currentSnapshot?.id).toBe('current:110')
-    expect(first.entries.map((item) => item.id)).toEqual(['flow:100'])
-    expect(first.pagination).toMatchObject({ returned: 1, hasMore: true })
+    expect(first.entries.map((item) => item.id)).toEqual(['flow:90'])
+    expect(first.boundaryStates['flow:80']?.blockNumber).toBe(80)
+    expect(first.currentSnapshot?.interval?.fromEntryId).toBe('flow:90')
+    expect(first.pagination.nextCursor).not.toBeNull()
+    expect(first.pagination).toEqual({ nextCursor: expect.any(String) })
 
     const second = await readMaterializedAllocationChart(
       { vault, limit: 1, direction: 'desc', cursor: first.pagination.nextCursor },
       database
     )
     expect(second.currentSnapshot).toBeNull()
-    expect(second.entries.map((item) => item.id)).toEqual(['flow:90'])
-    expect(second.pagination).toMatchObject({ returned: 1, hasMore: false, nextCursor: null })
+    expect(second.entries.map((item) => item.id)).toEqual(['flow:80'])
+    expect(second.pagination).toEqual({ nextCursor: null })
 
     await expect(
       readMaterializedAllocationHistory(
@@ -221,6 +271,21 @@ describe('materialized allocation history repository', () => {
       schemaVersion: 2,
       projection: 'detail',
       entry: { id: 'entry-a' }
+    })
+  })
+
+  it('keeps complete interval equations behind the detail route', async () => {
+    const database = new FakeDatabase([
+      entry('flow:90', 90, 'strategy_reallocation'),
+      entry('flow:100', 100, 'strategy_reallocation')
+    ])
+
+    const result = await readMaterializedAllocationEntry({ vault, entryId: 'flow:100', runId: '7' }, database)
+
+    expect(result.interval).toMatchObject({
+      fromEntryId: 'flow:90',
+      toEntryId: 'flow:100',
+      reconciliation: { balanceStatus: 'reconciled', residuals: expect.any(Array) }
     })
   })
 })

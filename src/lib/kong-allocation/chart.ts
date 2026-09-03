@@ -4,18 +4,18 @@ import type {
   AllocationChartEntry,
   AllocationChartEntryKind,
   AllocationChartExpectedAprImpact,
+  AllocationChartFlowNode,
   AllocationChartInterval,
   AllocationChartState,
   AllocationEntryState,
+  AllocationFlowInterval,
+  AllocationFlowNode,
   AllocationHistoryEntry,
+  MaterializedAllocationChartPayload,
   VaultAllocationVault
 } from './types'
 
-const CHART_ENTRY_KINDS = new Set<AllocationChartEntryKind>([
-  'idle_deployment',
-  'idle_deallocation',
-  'strategy_reallocation'
-])
+const CHART_ENTRY_KINDS = new Set<AllocationChartEntryKind>(['strategy_reallocation'])
 
 export function isAllocationChartEntryKind(kind: string): kind is AllocationChartEntryKind {
   return CHART_ENTRY_KINDS.has(kind as AllocationChartEntryKind)
@@ -23,13 +23,6 @@ export function isAllocationChartEntryKind(kind: string): kind is AllocationChar
 
 function nonzero(value: string | null | undefined): boolean {
   return typeof value === 'string' && /^\d+$/.test(value) && BigInt(value) !== 0n
-}
-
-function idleBps(state: AllocationEntryState): number | null {
-  if (state.totalIdle === null || !/^\d+$/.test(state.totalAssets) || !/^\d+$/.test(state.totalIdle)) return null
-  const totalAssets = BigInt(state.totalAssets)
-  if (totalAssets === 0n) return null
-  return Number((BigInt(state.totalIdle) * 10_000n) / totalAssets)
 }
 
 function relevantStrategyAddresses(entry: AllocationHistoryEntry): Address[] {
@@ -54,7 +47,10 @@ function relevantStrategyAddresses(entry: AllocationHistoryEntry): Address[] {
   return [...relevant].sort()
 }
 
-function strategyNames(entry: AllocationHistoryEntry): Map<Address, string | null> {
+function strategyNames(
+  entry: AllocationHistoryEntry,
+  interval: AllocationFlowInterval | null
+): Map<Address, string | null> {
   const names = new Map<Address, string | null>()
   for (const state of [entry.before, entry.after]) {
     for (const allocation of state?.allocations ?? []) names.set(allocation.strategyAddress, allocation.strategyName)
@@ -65,30 +61,28 @@ function strategyNames(entry: AllocationHistoryEntry): Map<Address, string | nul
       names.set(operation.subject.address, operation.subject.name)
     }
   }
+  for (const state of interval ? [interval.startState, interval.endState] : []) {
+    for (const allocation of state.allocations) names.set(allocation.strategyAddress, allocation.strategyName)
+  }
+  for (const flow of interval?.flows ?? []) {
+    for (const node of [flow.source, flow.target]) {
+      if (node.type === 'strategy') names.set(node.address, node.name)
+    }
+  }
   return names
 }
 
-function chartState(
-  state: AllocationEntryState,
-  addresses: readonly Address[],
-  names: ReadonlyMap<Address, string | null>
-): AllocationChartState {
+function chartState(state: AllocationEntryState, addresses: readonly Address[]): AllocationChartState {
   const allocations = new Map(state.allocations.map((allocation) => [allocation.strategyAddress, allocation]))
   return {
     blockNumber: state.blockNumber,
     blockTimestamp: state.blockTimestamp,
     totalAssets: state.totalAssets,
     totalIdle: state.totalIdle,
-    idleBps: idleBps(state),
-    allocations: addresses.map((strategyAddress) => {
-      const allocation = allocations.get(strategyAddress)
-      return {
-        strategyAddress,
-        strategyName: allocation?.strategyName ?? names.get(strategyAddress) ?? null,
-        currentDebt: allocation?.currentDebt ?? '0',
-        currentDebtBps: allocation?.currentDebtBps ?? 0
-      }
-    })
+    allocations: addresses.map((strategyAddress) => ({
+      strategyAddress,
+      currentDebt: allocations.get(strategyAddress)?.currentDebt ?? '0'
+    }))
   }
 }
 
@@ -118,77 +112,94 @@ function expectedAprImpact(entry: AllocationHistoryEntry): AllocationChartExpect
   }
 }
 
-function compactTransactions(entry: AllocationHistoryEntry): AllocationChartEntry['execution']['transactions'] {
-  const transactions = new Map<string, AllocationChartEntry['execution']['transactions'][number]>()
-  for (const transaction of entry.execution.transactions) {
-    const key = `${transaction.blockNumber}:${transaction.transactionHash}`
-    if (!transactions.has(key)) {
-      transactions.set(key, {
-        transactionHash: transaction.transactionHash,
-        blockNumber: transaction.blockNumber
-      })
-    }
-  }
-  return [...transactions.values()]
-}
-
 function detailsHref(vault: VaultAllocationVault, entryId: string, runId: string): string {
   return `/api/rest/views/allocation-history/${vault.chainId}/${vault.address.toLowerCase()}/entries/${encodeURIComponent(entryId)}?runId=${encodeURIComponent(runId)}`
+}
+
+function chartFlowNode(node: AllocationFlowNode): AllocationChartFlowNode {
+  return node.type === 'strategy' ? { type: 'strategy', address: node.address } : node
+}
+
+function compactInterval(interval: AllocationFlowInterval | null): AllocationChartInterval | null {
+  if (!interval) return null
+  return {
+    fromEntryId: interval.fromEntryId,
+    toEntryId: interval.toEntryId,
+    endKind: interval.endKind,
+    flows: interval.flows.map((flow) => ({
+      source: chartFlowNode(flow.source),
+      target: chartFlowNode(flow.target),
+      amount: flow.amount,
+      kind: flow.kind,
+      attribution: flow.attribution
+    })),
+    reconciliation: {
+      balanceStatus: interval.reconciliation.balanceStatus,
+      attributionStatus: interval.reconciliation.attributionStatus,
+      unattributedAmount: interval.reconciliation.unattributedAmount
+    }
+  }
+}
+
+function strategyDictionary(
+  names: ReadonlyMap<Address, string | null>,
+  data: AllocationChartEntry | AllocationChartCurrentSnapshot,
+  interval: AllocationFlowInterval | null
+): Record<string, string | null> {
+  const addresses = new Set(
+    (data.kind === 'current_snapshot' ? data.allocations : data.after.allocations).map(
+      (allocation) => allocation.strategyAddress
+    )
+  )
+  for (const flow of interval?.flows ?? []) {
+    for (const node of [flow.source, flow.target]) {
+      if (node.type === 'strategy') addresses.add(node.address)
+    }
+  }
+  return Object.fromEntries(
+    [...addresses].sort().map((strategyAddress) => [strategyAddress, names.get(strategyAddress) ?? null])
+  )
 }
 
 export function buildAllocationChartEntry(
   entry: AllocationHistoryEntry,
   vault: VaultAllocationVault,
   runId: string,
-  interval: AllocationChartInterval | null = null
+  interval: AllocationFlowInterval | null = null
 ): AllocationChartEntry | null {
   if (!isAllocationChartEntryKind(entry.kind)) return null
   if (!entry.before) throw new Error(`Chart entry ${entry.id} is missing its before state`)
-  const addresses = relevantStrategyAddresses(entry)
-  const names = strategyNames(entry)
   return {
     id: entry.id,
     kind: entry.kind,
-    startBlock: entry.startBlock,
     endBlock: entry.endBlock,
-    startTimestamp: entry.startTimestamp,
     endTimestamp: entry.endTimestamp,
-    before: chartState(entry.before, addresses, names),
-    after: chartState(entry.after, addresses, names),
-    interval,
+    after: chartState(entry.after, relevantStrategyAddresses(entry)),
+    interval: compactInterval(interval),
     execution: {
       automation: entry.execution.automation,
       mechanism: entry.execution.mechanism,
-      targetStatus: entry.execution.targetStatus,
-      transactions: compactTransactions(entry)
+      targetStatus: entry.execution.targetStatus
     },
     expectedAprImpact: expectedAprImpact(entry),
-    operations: entry.operations.map((operation) => ({
-      kind: operation.kind,
-      subject: operation.subject,
-      changes: operation.changes
-    })),
-    classification: { confidence: entry.classification.confidence },
-    detailsAvailable: true,
     detailsHref: detailsHref(vault, entry.id, runId)
   }
 }
 
 export function buildAllocationChartCurrentSnapshot(
   entry: AllocationHistoryEntry,
-  interval: AllocationChartInterval | null = null
+  interval: AllocationFlowInterval | null = null
 ): AllocationChartCurrentSnapshot | null {
   if (entry.kind !== 'current_snapshot') return null
   const addresses = entry.after.allocations
     .filter((allocation) => nonzero(allocation.currentDebt))
     .map((allocation) => allocation.strategyAddress)
     .sort()
-  const state = chartState(entry.after, addresses, strategyNames(entry))
   return {
     id: entry.id,
     kind: 'current_snapshot',
-    interval,
-    ...state
+    interval: compactInterval(interval),
+    ...chartState(entry.after, addresses)
   }
 }
 
@@ -196,9 +207,14 @@ export function buildAllocationChartPayload(
   entry: AllocationHistoryEntry,
   vault: VaultAllocationVault,
   runId: string,
-  interval: AllocationChartInterval | null = null
-): AllocationChartEntry | AllocationChartCurrentSnapshot | null {
-  return (
+  interval: AllocationFlowInterval | null = null
+): MaterializedAllocationChartPayload | null {
+  const data =
     buildAllocationChartCurrentSnapshot(entry, interval) ?? buildAllocationChartEntry(entry, vault, runId, interval)
-  )
+  if (!data) return null
+  return {
+    data,
+    strategies: strategyDictionary(strategyNames(entry, interval), data, interval),
+    detailInterval: interval
+  }
 }

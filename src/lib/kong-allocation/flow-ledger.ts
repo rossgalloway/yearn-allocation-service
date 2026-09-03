@@ -1,11 +1,11 @@
 import { isAllocationChartEntryKind } from './chart'
 import type {
   Address,
-  AllocationChartInterval,
-  AllocationChartState,
   AllocationEntryState,
   AllocationFlowBalanceNode,
+  AllocationFlowInterval,
   AllocationFlowNode,
+  AllocationFlowState,
   AllocationHistoryEntry,
   AllocationIntervalFlow,
   AllocationSourceEvent
@@ -68,7 +68,7 @@ function intervalState(
   state: AllocationEntryState,
   strategyAddresses: readonly Address[],
   names: ReadonlyMap<Address, string | null>
-): AllocationChartState {
+): AllocationFlowState {
   const allocations = new Map(state.allocations.map((allocation) => [allocation.strategyAddress, allocation]))
   return {
     blockNumber: state.blockNumber,
@@ -346,10 +346,10 @@ function buildInterval(input: {
   fromEntry: AllocationHistoryEntry
   toEntry: AllocationHistoryEntry | null
   endState: AllocationEntryState
-  endKind: AllocationChartInterval['endKind']
+  endKind: AllocationFlowInterval['endKind']
   events: readonly AllocationSourceEvent[]
   vaultAddress: Address
-}): AllocationChartInterval {
+}): AllocationFlowInterval {
   const startState = input.fromEntry.after
   const names = strategyNames(startState, input.endState)
   const eventSlice = input.events.filter(
@@ -455,11 +455,11 @@ export function buildAllocationFlowIntervals(input: {
   entries: readonly AllocationHistoryEntry[]
   events: readonly AllocationSourceEvent[]
   vaultAddress: Address
-}): Map<string, AllocationChartInterval> {
+}): Map<string, AllocationFlowInterval> {
   const chartEntries = input.entries
     .filter((entry) => isAllocationChartEntryKind(entry.kind))
     .sort((left, right) => left.endBlock - right.endBlock || left.id.localeCompare(right.id))
-  const intervals = new Map<string, AllocationChartInterval>()
+  const intervals = new Map<string, AllocationFlowInterval>()
   for (let index = 1; index < chartEntries.length; index += 1) {
     const fromEntry = chartEntries[index - 1]
     const toEntry = chartEntries[index]

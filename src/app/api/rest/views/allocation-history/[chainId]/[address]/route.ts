@@ -84,6 +84,7 @@ export async function GET(request: Request, context: { params: Promise<{ chainId
     const history =
       selectedProjection === 'chart' ? await getKongAllocationChart(input) : await getKongAllocationHistory(input)
     return json(history, {
+      request,
       cacheControl:
         history.dataQuality.certification === 'provisional'
           ? 'no-store'

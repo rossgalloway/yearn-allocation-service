@@ -32,13 +32,11 @@ export interface VaultAllocationHistoryResponse {
   }
 }
 
-export type AllocationChartEntryKind = 'idle_deployment' | 'idle_deallocation' | 'strategy_reallocation'
+export type AllocationChartEntryKind = 'strategy_reallocation'
 
 export interface AllocationChartStrategyState {
   strategyAddress: Address
-  strategyName: string | null
   currentDebt: string
-  currentDebtBps: number
 }
 
 export interface AllocationChartState {
@@ -46,8 +44,21 @@ export interface AllocationChartState {
   blockTimestamp: number
   totalAssets: string
   totalIdle: string | null
-  idleBps: number | null
   allocations: AllocationChartStrategyState[]
+}
+
+export interface AllocationFlowState {
+  blockNumber: number
+  blockTimestamp: number
+  totalAssets: string
+  totalIdle: string | null
+  idleBps: number | null
+  allocations: Array<{
+    strategyAddress: Address
+    strategyName: string | null
+    currentDebt: string
+    currentDebtBps: number
+  }>
 }
 
 export interface AllocationChartCurrentSnapshot extends AllocationChartState {
@@ -101,12 +112,12 @@ export interface AllocationFlowResidual {
   residualAmount: string
 }
 
-export interface AllocationChartInterval {
+export interface AllocationFlowInterval {
   fromEntryId: string
   toEntryId: string | null
   endKind: 'allocation_entry' | 'safe_head'
-  startState: AllocationChartState
-  endState: AllocationChartState
+  startState: AllocationFlowState
+  endState: AllocationFlowState
   flows: AllocationIntervalFlow[]
   reconciliation: {
     openingTotalAssets: string
@@ -117,6 +128,31 @@ export interface AllocationChartInterval {
     unattributedAmount: string
     checkedNodeTypes: ['idle', 'strategy']
     residuals: AllocationFlowResidual[]
+  }
+}
+
+export type AllocationChartFlowNode =
+  | { type: 'idle' }
+  | { type: 'strategy'; address: Address }
+  | AllocationFlowBoundaryNode
+
+export interface AllocationChartFlow {
+  source: AllocationChartFlowNode
+  target: AllocationChartFlowNode
+  amount: string
+  kind: AllocationFlowKind
+  attribution: AllocationIntervalFlow['attribution']
+}
+
+export interface AllocationChartInterval {
+  fromEntryId: string
+  toEntryId: string | null
+  endKind: 'allocation_entry' | 'safe_head'
+  flows: AllocationChartFlow[]
+  reconciliation: {
+    balanceStatus: 'reconciled' | 'unreconciled'
+    attributionStatus: 'complete' | 'partial'
+    unattributedAmount: string
   }
 }
 
@@ -138,38 +174,32 @@ export type AllocationChartExpectedAprImpact =
       reason: 'no_matched_doa_policy' | 'policy_apr_unavailable'
     }
 
-export interface AllocationChartOperation {
-  kind: AllocationEntryOperation['kind']
-  subject: AllocationEntryOperation['subject']
-  changes: AllocationEntryOperation['changes']
-}
-
 export interface AllocationChartEntry {
   id: string
   kind: AllocationChartEntryKind
-  startBlock: number
   endBlock: number
-  startTimestamp: number
   endTimestamp: number
-  before: AllocationChartState
   after: AllocationChartState
   interval: AllocationChartInterval | null
   execution: {
     automation: AllocationHistoryEntry['execution']['automation']
     mechanism: AllocationHistoryEntry['execution']['mechanism']
     targetStatus: AllocationHistoryEntry['execution']['targetStatus']
-    transactions: Array<{
-      transactionHash: Hash
-      blockNumber: number
-    }>
   }
   expectedAprImpact: AllocationChartExpectedAprImpact
-  operations: AllocationChartOperation[]
-  classification: {
-    confidence: AllocationHistoryEntry['classification']['confidence']
-  }
-  detailsAvailable: true
   detailsHref: string
+}
+
+export interface MaterializedAllocationChartPayload {
+  data: AllocationChartEntry | AllocationChartCurrentSnapshot
+  strategies: Record<string, string | null>
+  detailInterval: AllocationFlowInterval | null
+}
+
+export interface AllocationChartVault {
+  chainId: number
+  address: Address
+  name: string | null
 }
 
 export interface VaultAllocationChartResponse {
@@ -178,10 +208,14 @@ export interface VaultAllocationChartResponse {
   generatedAt: number
   direction: TimelineDirection
   dataQuality: VaultAllocationHistoryResponse['dataQuality']
-  vault: VaultAllocationVault
+  vault: AllocationChartVault
+  strategies: Record<string, string | null>
+  boundaryStates: Record<string, AllocationChartState>
   currentSnapshot: AllocationChartCurrentSnapshot | null
   entries: AllocationChartEntry[]
-  pagination: VaultAllocationHistoryResponse['pagination']
+  pagination: {
+    nextCursor: string | null
+  }
 }
 
 export interface VaultAllocationHistoryEntryResponse {
@@ -191,6 +225,7 @@ export interface VaultAllocationHistoryEntryResponse {
   dataQuality: VaultAllocationHistoryResponse['dataQuality']
   vault: VaultAllocationVault
   entry: AllocationHistoryEntry
+  interval: AllocationFlowInterval | null
 }
 
 export interface VaultAllocationVault {

@@ -53,6 +53,7 @@ export async function GET(
       runId: selectedRunId
     })
     return json(detail, {
+      request,
       cacheControl:
         detail.dataQuality.certification === 'provisional'
           ? 'no-store'

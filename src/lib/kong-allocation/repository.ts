@@ -13,9 +13,11 @@ import { AllocationHistoryCursorError, decodeAllocationHistoryCursor, encodeAllo
 import { buildAllocationFlowIntervals } from './flow-ledger'
 import type {
   AllocationChartCurrentSnapshot,
-  AllocationChartEntry,
+  AllocationChartInterval,
+  AllocationChartState,
   AllocationHistoryEntry,
   AllocationSourceEvent,
+  MaterializedAllocationChartPayload,
   TimelineDirection,
   VaultAllocationChartResponse,
   VaultAllocationHistoryEntryResponse,
@@ -25,7 +27,7 @@ import type {
 import type { TestVault } from './vaults'
 
 export const ALLOCATION_SCHEMA_VERSION = 2
-export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v2-flow-ledger'
+export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v2-lean-chart'
 const DEFAULT_STALE_RUN_SECONDS = 6 * 60 * 60
 const ENTRY_INSERT_BATCH_SIZE = 250
 
@@ -44,6 +46,7 @@ interface EntryRow<Payload = AllocationHistoryEntry> extends QueryResultRow {
   entry_id: string
   end_block: string
   payload: Payload | string
+  chart_payload?: MaterializedAllocationChartPayload | string | null
 }
 
 interface RunRow extends QueryResultRow {
@@ -136,16 +139,16 @@ export async function readMaterializedAllocationHistory(
   let cursorClause = ''
   if (cursor) {
     values.push(cursor.endBlock, cursor.entryId)
-    cursorClause = `AND (end_block, entry_id) ${comparison} ($3::bigint, $4::text)`
+    cursorClause = `AND (e.end_block, e.entry_id) ${comparison} ($3::bigint, $4::text)`
   }
   let result: QueryResult<EntryRow>
   try {
     result = await queryable.query<EntryRow>(
       `SELECT entry_id, end_block::text, payload
-       FROM allocation_history_entry
-       WHERE run_id = $1::bigint
+       FROM allocation_history_entry AS e
+       WHERE e.run_id = $1::bigint
          ${cursorClause}
-       ORDER BY end_block ${order}, entry_id ${order}
+       ORDER BY e.end_block ${order}, e.entry_id ${order}
        LIMIT $2`,
       values
     )
@@ -202,6 +205,39 @@ function projectionLimitations(projection: ProjectionRow): string[] {
   return limitations
 }
 
+function materializedChartPayload(
+  value: MaterializedAllocationChartPayload | string,
+  label: string
+): MaterializedAllocationChartPayload {
+  const payload = jsonObject(value, label)
+  if (
+    !payload ||
+    typeof payload !== 'object' ||
+    !payload.data ||
+    typeof payload.data !== 'object' ||
+    !payload.strategies ||
+    typeof payload.strategies !== 'object' ||
+    Array.isArray(payload.strategies)
+  ) {
+    throw new DatabaseUpstreamError(`Postgres returned invalid ${label} JSON`)
+  }
+  return payload
+}
+
+function addStrategyNames(target: Record<string, string | null>, source: Record<string, string | null>): void {
+  for (const [address, name] of Object.entries(source)) {
+    if (!(address in target) || name !== null) target[address] = name
+  }
+}
+
+function addBoundaryId(
+  ids: Set<string>,
+  presentEntryIds: ReadonlySet<string>,
+  interval: AllocationChartInterval | null
+): void {
+  if (interval && !presentEntryIds.has(interval.fromEntryId)) ids.add(interval.fromEntryId)
+}
+
 export async function readMaterializedAllocationChart(
   input: {
     vault: TestVault
@@ -233,25 +269,26 @@ export async function readMaterializedAllocationChart(
   let cursorClause = ''
   if (cursor) {
     values.push(cursor.endBlock, cursor.entryId)
-    cursorClause = `AND (end_block, entry_id) ${comparison} ($3::bigint, $4::text)`
+    cursorClause = `AND (e.end_block, e.entry_id) ${comparison} ($3::bigint, $4::text)`
   }
 
-  let result: QueryResult<EntryRow<AllocationChartEntry>>
+  let result: QueryResult<EntryRow<MaterializedAllocationChartPayload>>
+  let currentSnapshotPayload: MaterializedAllocationChartPayload | null = null
   let currentSnapshot: AllocationChartCurrentSnapshot | null = null
   try {
-    result = await queryable.query<EntryRow<AllocationChartEntry>>(
+    result = await queryable.query<EntryRow<MaterializedAllocationChartPayload>>(
       `SELECT entry_id, end_block::text, chart_payload AS payload
-       FROM allocation_history_entry
-       WHERE run_id = $1::bigint
-         AND kind IN ('idle_deployment', 'idle_deallocation', 'strategy_reallocation')
-         AND chart_payload IS NOT NULL
+       FROM allocation_history_entry AS e
+       WHERE e.run_id = $1::bigint
+         AND e.kind = 'strategy_reallocation'
+         AND e.chart_payload IS NOT NULL
          ${cursorClause}
-       ORDER BY end_block ${order}, entry_id ${order}
+       ORDER BY e.end_block ${order}, e.entry_id ${order}
        LIMIT $2`,
       values
     )
     if (!cursor) {
-      const snapshot = await queryable.query<EntryRow<AllocationChartCurrentSnapshot>>(
+      const snapshot = await queryable.query<EntryRow<MaterializedAllocationChartPayload>>(
         `SELECT entry_id, end_block::text, chart_payload AS payload
          FROM allocation_history_entry
          WHERE run_id = $1::bigint
@@ -265,7 +302,11 @@ export async function readMaterializedAllocationChart(
           'Allocation chart current snapshot has not been materialized for this vault'
         )
       }
-      currentSnapshot = jsonObject(snapshot.rows[0].payload, 'allocation chart current snapshot')
+      currentSnapshotPayload = materializedChartPayload(snapshot.rows[0].payload, 'allocation chart current snapshot')
+      if (currentSnapshotPayload.data.kind !== 'current_snapshot') {
+        throw new DatabaseUpstreamError('Postgres returned an invalid allocation chart current snapshot')
+      }
+      currentSnapshot = currentSnapshotPayload.data
     }
   } catch (error) {
     if (error instanceof AllocationHistoryNotMaterializedError) throw error
@@ -274,7 +315,56 @@ export async function readMaterializedAllocationChart(
 
   const hasMore = result.rows.length > input.limit
   const selected = result.rows.slice(0, input.limit)
-  const entries = selected.map((row) => jsonObject(row.payload, 'allocation chart entry'))
+  const selectedPayloads = selected.map((row) => materializedChartPayload(row.payload, 'allocation chart entry'))
+  const entries = selectedPayloads.map((payload) => {
+    if (payload.data.kind !== 'strategy_reallocation') {
+      throw new DatabaseUpstreamError('Postgres returned an invalid allocation chart entry')
+    }
+    return payload.data
+  })
+  const strategies: Record<string, string | null> = {}
+  for (const payload of selectedPayloads) addStrategyNames(strategies, payload.strategies)
+  if (currentSnapshotPayload) addStrategyNames(strategies, currentSnapshotPayload.strategies)
+
+  const presentEntryIds = new Set(entries.map((entry) => entry.id))
+  const boundaryIds = new Set<string>()
+  for (const entry of entries) addBoundaryId(boundaryIds, presentEntryIds, entry.interval)
+  addBoundaryId(boundaryIds, presentEntryIds, currentSnapshot?.interval ?? null)
+  const boundaryStates: Record<string, AllocationChartState> = {}
+  if (boundaryIds.size > 0) {
+    let boundaryResult: QueryResult<EntryRow<MaterializedAllocationChartPayload>>
+    try {
+      boundaryResult = await queryable.query<EntryRow<MaterializedAllocationChartPayload>>(
+        `SELECT entry_id, end_block::text, chart_payload AS payload
+         FROM allocation_history_entry
+         WHERE run_id = $1::bigint
+           AND entry_id = ANY($2::text[])
+           AND kind = 'strategy_reallocation'
+           AND chart_payload IS NOT NULL`,
+        [projection.run_id, [...boundaryIds]]
+      )
+    } catch (error) {
+      throw new DatabaseUpstreamError('Unable to read allocation chart boundary states', { cause: error })
+    }
+    for (const row of boundaryResult.rows) {
+      const payload = materializedChartPayload(row.payload, 'allocation chart boundary state')
+      if (payload.data.kind !== 'strategy_reallocation') continue
+      boundaryStates[row.entry_id] = payload.data.after
+      addStrategyNames(
+        strategies,
+        Object.fromEntries(
+          payload.data.after.allocations.map(({ strategyAddress }) => [
+            strategyAddress,
+            payload.strategies[strategyAddress] ?? null
+          ])
+        )
+      )
+      boundaryIds.delete(row.entry_id)
+    }
+    if (boundaryIds.size > 0) {
+      throw new DatabaseUpstreamError('Allocation chart boundary state is unavailable')
+    }
+  }
   const last = selected.at(-1)
   const nextCursor =
     hasMore && last
@@ -298,15 +388,16 @@ export async function readMaterializedAllocationChart(
       certification: projection.coverage_safe_for_timeline ? 'certified' : 'provisional',
       limitations: projectionLimitations(projection)
     },
-    vault: jsonObject(projection.vault_payload, 'vault metadata'),
+    vault: ((vault) => ({
+      chainId: vault.chainId,
+      address: vault.address,
+      name: vault.name
+    }))(jsonObject(projection.vault_payload, 'vault metadata')),
+    strategies,
+    boundaryStates,
     currentSnapshot,
     entries,
-    pagination: {
-      limit: input.limit,
-      returned: entries.length,
-      hasMore,
-      nextCursor
-    }
+    pagination: { nextCursor }
   }
 }
 
@@ -358,7 +449,7 @@ export async function readMaterializedAllocationEntry(
   try {
     projection = await projectionForEntry(queryable, input.vault, input.runId ?? null)
     const result = await queryable.query<EntryRow>(
-      `SELECT entry_id, end_block::text, payload
+      `SELECT entry_id, end_block::text, payload, chart_payload
        FROM allocation_history_entry
        WHERE run_id = $1::bigint AND entry_id = $2
        LIMIT 1`,
@@ -375,7 +466,11 @@ export async function readMaterializedAllocationEntry(
         limitations: projectionLimitations(projection)
       },
       vault: jsonObject(projection.vault_payload, 'vault metadata'),
-      entry: jsonObject(row.payload, 'allocation entry')
+      entry: jsonObject(row.payload, 'allocation entry'),
+      interval:
+        row.chart_payload && projection.materializer_version === ALLOCATION_MATERIALIZER_VERSION
+          ? materializedChartPayload(row.chart_payload, 'allocation detail interval').detailInterval
+          : null
     }
   } catch (error) {
     if (

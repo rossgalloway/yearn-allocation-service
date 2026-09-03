@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildAllocationChartCurrentSnapshot, buildAllocationChartEntry } from './chart'
+import { buildAllocationChartCurrentSnapshot, buildAllocationChartEntry, buildAllocationChartPayload } from './chart'
+import { buildAllocationFlowIntervals } from './flow-ledger'
 import type { Address, AllocationEntryState, AllocationHistoryEntry, Hash, VaultAllocationVault } from './types'
 
 const vaultAddress = '0x00000000000000000000000000000000000000aa' as Address
@@ -84,7 +85,7 @@ function state(blockNumber: number, firstDebt: string, totalIdle: string): Alloc
   }
 }
 
-function entry(kind: AllocationHistoryEntry['kind'] = 'idle_deallocation'): AllocationHistoryEntry {
+function entry(kind: AllocationHistoryEntry['kind'] = 'strategy_reallocation'): AllocationHistoryEntry {
   return {
     id: 'allocation-entry:1:vault:100-100',
     kind,
@@ -202,14 +203,14 @@ describe('allocation chart projection', () => {
     const result = buildAllocationChartEntry(entry(), vault, '24')
 
     expect(result).toMatchObject({
-      kind: 'idle_deallocation',
-      before: { blockNumber: 99, idleBps: 1000 },
-      after: { blockNumber: 100, idleBps: 2000 },
+      kind: 'strategy_reallocation',
+      endBlock: 100,
+      endTimestamp: 1000,
+      after: { blockNumber: 100, totalAssets: '1000', totalIdle: '200' },
       execution: {
         automation: 'automatic',
         mechanism: 'allocator_keeper',
-        targetStatus: 'matched',
-        transactions: [{ transactionHash, blockNumber: 100 }]
+        targetStatus: 'matched'
       },
       expectedAprImpact: {
         status: 'available',
@@ -218,26 +219,27 @@ describe('allocation chart projection', () => {
         deltaAprBps: 4,
         relationship: 'governing_policy',
         applicationStatus: 'inferred_from_historical_config'
-      },
-      operations: [{ kind: 'max_debt_updated' }],
-      classification: { confidence: 'high' },
-      detailsAvailable: true
+      }
     })
-    expect(result?.before.allocations.map((allocation) => allocation.strategyAddress)).toEqual([
-      first,
-      configured,
-      policyOnly
-    ])
     expect(result?.after.allocations.map((allocation) => allocation.strategyAddress)).toEqual([
       first,
       configured,
       policyOnly
     ])
     expect(result?.detailsHref).toContain('runId=24')
+    expect(result).not.toHaveProperty('before')
+    expect(result).not.toHaveProperty('startBlock')
+    expect(result).not.toHaveProperty('operations')
+    expect(result).not.toHaveProperty('classification')
+    expect(result?.after).not.toHaveProperty('idleBps')
+    expect(result?.after.allocations[0]).not.toHaveProperty('currentDebtBps')
+    expect(result?.execution).not.toHaveProperty('transactions')
   })
 
-  it('excludes pure configuration entries from chart entries', () => {
+  it('only includes strategy reallocations as chart entries', () => {
     expect(buildAllocationChartEntry(entry('configuration_change'), vault, '24')).toBeNull()
+    expect(buildAllocationChartEntry(entry('idle_deployment'), vault, '24')).toBeNull()
+    expect(buildAllocationChartEntry(entry('idle_deallocation'), vault, '24')).toBeNull()
   })
 
   it('distinguishes missing policies from policies without APR estimates', () => {
@@ -283,8 +285,54 @@ describe('allocation chart projection', () => {
       kind: 'current_snapshot',
       blockNumber: 101,
       blockTimestamp: 1010,
-      idleBps: 2000,
       allocations: [{ strategyAddress: first }]
     })
+  })
+
+  it('stores strategy names separately from the lean chart data', () => {
+    const result = buildAllocationChartPayload(entry(), vault, '24')
+
+    expect(result?.data.kind).toBe('strategy_reallocation')
+    expect(result?.strategies).toMatchObject({
+      [first]: 'First',
+      [configured]: 'Configured',
+      [policyOnly]: 'Policy only'
+    })
+    expect(result?.strategies).not.toHaveProperty(irrelevant)
+    expect(JSON.stringify(result?.data)).not.toContain('strategyName')
+  })
+
+  it('replaces repeated interval states and equations with references', () => {
+    const previous = entry()
+    previous.id = 'allocation-entry:previous'
+    previous.startBlock = 90
+    previous.endBlock = 90
+    previous.startTimestamp = 900
+    previous.endTimestamp = 900
+    previous.before = state(89, '900', '100')
+    previous.after = state(90, '900', '100')
+    const current = entry()
+    const interval = buildAllocationFlowIntervals({
+      entries: [previous, current],
+      events: [],
+      vaultAddress
+    }).get(current.id)
+    const result = buildAllocationChartEntry(current, vault, '24', interval)
+
+    expect(result?.interval).toMatchObject({
+      fromEntryId: previous.id,
+      toEntryId: current.id,
+      reconciliation: {
+        balanceStatus: 'reconciled',
+        attributionStatus: 'partial',
+        unattributedAmount: '200'
+      }
+    })
+    expect(result?.interval).not.toHaveProperty('startState')
+    expect(result?.interval).not.toHaveProperty('endState')
+    expect(result?.interval?.reconciliation).not.toHaveProperty('residuals')
+    expect(result?.interval?.reconciliation).not.toHaveProperty('openingTotalAssets')
+    expect(result?.interval?.flows[0]).not.toHaveProperty('evidence')
+    expect(JSON.stringify(result?.interval?.flows)).not.toContain('name')
   })
 })
