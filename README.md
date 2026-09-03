@@ -14,6 +14,14 @@ The initial state and coverage semantics are informed by `yearn.fi` branch `code
   `unallocatedBps`.
 
 See [docs/data-contract.md](./docs/data-contract.md) for processing and failure semantics.
+See [docs/kong-spec-changes-summary.md](./docs/kong-spec-changes-summary.md) for a short overview of the main changes from the
+original Kong spec and the REST/GraphQL split.
+See [docs/kong-allocation-history-spec-proposed.md](./docs/kong-allocation-history-spec-proposed.md) for the complete proposed
+specification with all changes applied.
+See [docs/kong-allocation-history-spec-redline.md](./docs/kong-allocation-history-spec-redline.md) for a complete proposed
+redline of the original spec.
+For easier review, open the styled
+[HTML diff](./docs/kong-allocation-history-spec-redline.html) through a local static server.
 Prototype decisions that differ from the Kong reference are tracked in
 [docs/reference-spec-deltas.md](./docs/reference-spec-deltas.md).
 

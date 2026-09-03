@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Kong Allocation History Spec: Proposed Diff</title>
+    <style>
+      :root {
+        --canvas: oklch(0.965 0.006 90);
+        --paper: oklch(0.992 0.004 90);
+        --ink: oklch(0.245 0.018 250);
+        --muted: oklch(0.52 0.022 250);
+        --rule: oklch(0.87 0.012 250);
+        --accent: oklch(0.47 0.115 250);
+        --added: oklch(0.43 0.115 148);
+        --added-bg: oklch(0.955 0.035 148);
+        --added-rule: oklch(0.79 0.08 148);
+        --removed: oklch(0.47 0.14 28);
+        --removed-bg: oklch(0.955 0.035 28);
+        --removed-rule: oklch(0.81 0.075 28);
+        --code: oklch(0.30 0.02 250);
+        --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: var(--canvas);
+        font-family: var(--sans);
+        font-size: 15px;
+        line-height: 1.62;
+      }
+      button { font: inherit; }
+      a { color: var(--accent); text-underline-offset: 0.18em; }
+      a:hover { text-decoration-thickness: 2px; }
+
+      .topbar {
+        position: sticky;
+        z-index: 20;
+        top: 0;
+        display: flex;
+        min-height: 58px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 10px 24px;
+        border-bottom: 1px solid var(--rule);
+        background: color-mix(in oklch, var(--paper) 94%, transparent);
+        backdrop-filter: blur(12px);
+      }
+      .brand { min-width: 0; }
+      .brand strong {
+        display: block;
+        overflow: hidden;
+        font-size: 14px;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .brand span { color: var(--muted); font-size: 12px; }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .segmented {
+        display: inline-flex;
+        padding: 3px;
+        border: 1px solid var(--rule);
+        border-radius: 8px;
+        background: var(--canvas);
+      }
+      .segmented button,
+      .print-button {
+        min-height: 32px;
+        padding: 5px 10px;
+        border: 0;
+        border-radius: 5px;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .segmented button[aria-pressed="true"] {
+        color: var(--ink);
+        background: var(--paper);
+        box-shadow: 0 1px 4px oklch(0.24 0.02 250 / 0.12);
+      }
+      .print-button { border: 1px solid var(--rule); background: var(--paper); }
+      button:focus-visible,
+      a:focus-visible {
+        outline: 3px solid color-mix(in oklch, var(--accent) 45%, transparent);
+        outline-offset: 2px;
+      }
+
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1180px);
+        justify-content: center;
+        padding: 20px clamp(24px, 4vw, 56px) 64px;
+      }
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 750;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .document {
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--rule);
+        border-radius: 7px;
+        background: var(--paper);
+      }
+      .document-header { padding: 30px 32px 26px; border-bottom: 1px solid var(--rule); }
+      .document-header h1 {
+        max-width: 28ch;
+        margin: 0;
+        font-size: 32px;
+        font-weight: 760;
+        letter-spacing: -0.035em;
+        line-height: 1.06;
+      }
+      .document-header p { max-width: 68ch; margin: 22px 0 0; color: var(--muted); font-size: 14px; }
+      .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 24px; }
+      .legend span {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .legend i {
+        width: 11px;
+        height: 11px;
+        border: 1px solid var(--rule);
+        border-radius: 2px;
+        background: var(--paper);
+      }
+      .legend .added-key i { border-color: var(--added-rule); background: var(--added-bg); }
+      .legend .removed-key i { border-color: var(--removed-rule); background: var(--removed-bg); }
+      .document-body { padding: 0 0 36px; }
+      .section-heading {
+        scroll-margin-top: 84px;
+        margin: 0;
+        padding: 30px 32px 10px;
+        letter-spacing: -0.025em;
+        line-height: 1.15;
+      }
+      h2.section-heading {
+        margin-top: 10px;
+        border-top: 1px solid var(--rule);
+        font-size: 23px;
+        font-weight: 760;
+      }
+      h2.section-heading:first-child { margin-top: 0; border-top: 0; }
+      h3.section-heading { padding-top: 22px; font-size: 17px; font-weight: 720; }
+
+      code {
+        padding: 0.12em 0.32em;
+        border: 1px solid var(--rule);
+        border-radius: 4px;
+        color: var(--code);
+        background: var(--canvas);
+        font-family: var(--mono);
+        font-size: 0.87em;
+      }
+
+      .diff-row {
+        position: relative;
+        display: grid;
+        grid-template-columns: 42px minmax(0, 1fr);
+        margin: 0 32px;
+        border: 0;
+        border-radius: 0;
+        font-family: var(--mono);
+        font-size: 13px;
+        line-height: 1.48;
+      }
+      .diff-row .gutter {
+        display: flex;
+        min-height: 26px;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 3px;
+        border-right: 1px solid color-mix(in oklch, var(--rule) 75%, transparent);
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 12px;
+        font-weight: 800;
+        user-select: none;
+      }
+      .diff-row .content { min-width: 0; padding: 2px 16px 3px 10px; }
+      .diff-row p { display: inline; margin: 0; }
+      .diff-row.context-block .gutter::before { content: ""; }
+      .code-marker {
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+        padding-top: 1px;
+        border-right: 1px solid color-mix(in oklch, var(--rule) 70%, transparent);
+        font-weight: 800;
+        user-select: none;
+      }
+      .diff-row.add-block { color: var(--added); background: var(--added-bg); }
+      .diff-row.add-block .gutter,
+      .code-line.addition .code-marker { color: var(--added); }
+      .diff-row.add-block .gutter::before,
+      .code-line.addition .code-marker::before { content: "+"; }
+      .diff-row.remove-block { color: var(--removed); background: var(--removed-bg); }
+      .diff-row.remove-block .gutter,
+      .code-line.removal .code-marker { color: var(--removed); }
+      .diff-row.remove-block .gutter::before,
+      .code-line.removal .code-marker::before { content: "−"; }
+      .diff-row del {
+        color: var(--removed);
+        text-decoration-color: color-mix(in oklch, var(--removed) 65%, transparent);
+        text-decoration-thickness: 1.5px;
+      }
+      .diff-row.add-block strong:first-child { color: var(--added); }
+      .diff-row.add-block code,
+      .code-line.addition { color: var(--added); }
+      .diff-row.remove-block code,
+      .code-line.removal { color: var(--removed); }
+      .line-ref {
+        display: inline;
+        margin-left: 8px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 10px;
+        opacity: 0;
+        transition: opacity 140ms ease-out;
+        white-space: nowrap;
+      }
+      .diff-row:hover .line-ref { opacity: 0.8; }
+      .code-block {
+        overflow: auto;
+        margin: 0 32px;
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+        background: oklch(0.975 0.006 250);
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+      .code-line {
+        display: grid;
+        grid-template-columns: 36px minmax(max-content, 1fr);
+        min-height: 22px;
+        white-space: pre;
+      }
+      .code-line.addition { background: var(--added-bg); }
+      .code-line.removal { background: var(--removed-bg); }
+      .code-text { padding: 1px 12px; }
+      .table-wrap {
+        overflow-x: auto;
+        margin: 8px 32px 14px;
+        border-top: 1px solid var(--rule);
+        border-bottom: 1px solid var(--rule);
+      }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th,
+      td { padding: 10px 12px; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
+      th {
+        color: var(--muted);
+        background: var(--canvas);
+        font-size: 11px;
+        letter-spacing: 0.055em;
+        text-transform: uppercase;
+      }
+      tr:last-child td { border-bottom: 0; }
+      tr.add-block { color: var(--added); background: var(--added-bg); }
+      tr.remove-block { color: var(--removed); background: var(--removed-bg); }
+      .table-wrap tr.add-block code { color: var(--added); }
+      .table-wrap tr.remove-block code,
+      .table-wrap tr.remove-block del { color: var(--removed); }
+      .load-error {
+        margin: 36px 54px;
+        padding: 20px;
+        border: 1px solid var(--removed-rule);
+        border-radius: 7px;
+        color: var(--removed);
+        background: var(--removed-bg);
+      }
+      body[data-filter="changes"] .context-block,
+      body[data-filter="changes"] .code-line.context-line,
+      body[data-filter="changes"] tr.context-block { display: none; }
+      body[data-filter="changes"] .document-body { padding-top: 8px; }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+
+      @media (max-width: 900px) {
+        .layout { padding: 12px 8px 40px; }
+        .topbar { align-items: flex-start; padding: 10px 12px; }
+        .brand span,
+        .print-button { display: none; }
+        .document-header { padding: 26px 18px 22px; }
+        .document-header h1 { font-size: 27px; }
+        .section-heading { padding-right: 18px; padding-left: 18px; }
+        .diff-row { grid-template-columns: 30px minmax(0, 1fr); margin-right: 18px; margin-left: 18px; }
+        .diff-row .content { padding-right: 10px; padding-left: 7px; }
+        .code-block { margin-right: 18px; margin-left: 18px; }
+        .table-wrap { margin-right: 18px; margin-left: 18px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        html { scroll-behavior: auto; }
+        .line-ref { transition: none; }
+      }
+      @media print {
+        body { background: var(--paper); font-size: 10pt; }
+        .topbar,
+        .layout { display: block; padding: 0; }
+        .document { border: 0; box-shadow: none; }
+        .document-header,
+        .section-heading { padding-right: 0; padding-left: 0; }
+        .diff-row,
+        .code-block,
+        .table-wrap { break-inside: avoid; margin-right: 0; margin-left: 0; }
+      }
+    </style>
+  </head>
+  <body data-filter="all">
+    <header class="topbar">
+      <div class="brand">
+        <strong>Kong allocation history spec</strong>
+        <span>Proposed redline against Kong #396</span>
+      </div>
+      <div class="controls">
+        <div class="segmented" role="group" aria-label="Diff visibility">
+          <button type="button" data-filter-button="all" aria-pressed="true">All lines</button>
+          <button type="button" data-filter-button="changes" aria-pressed="false">Changes only</button>
+        </div>
+        <button class="print-button" type="button" id="print">Print</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <main class="document">
+        <header class="document-header">
+          <p class="eyebrow">Technical proposal</p>
+          <h1>Allocation history, proposed changes</h1>
+          <p>
+            A review-focused rendering of the complete Kong #396 redline. Removed requirements are red and struck through.
+            Proposed requirements are green. Neutral lines preserve the original context.
+          </p>
+          <div class="legend" aria-label="Diff legend">
+            <span class="removed-key"><i></i>Removed or replaced</span>
+            <span class="added-key"><i></i>Proposed addition</span>
+            <span><i></i>Unchanged context</span>
+            <span><code>source L#</code> Combined redline line</span>
+          </div>
+          <p>
+            <a href="https://hackmd.io/@murderteeth/rJkQlX-AWx">Original HackMD spec</a>
+            · <a href="https://artifacts.yearn.dev/1y/6532c957e3ef76e6d1313e4f6984efca.md">Proposed specification</a>
+          </p>
+        </header>
+        <article class="document-body" id="document-body" aria-live="polite">
+          <p class="load-error">Loading the redline…</p>
+        </article>
+      </main>
+    </div>
+
+    <script>
+      const sourceUrl = './kong-allocation-history-spec-redline.md'
+      const body = document.querySelector('#document-body')
+
+      function escapeHtml(value) {
+        return value
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+      }
+
+      function slugify(value) {
+        return value
+          .replace(/~~/g, '')
+          .replace(/[`*_#]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+      }
+
+      function cleanAdditionLabel(value) {
+        return value
+          .replace(/^\*\*(?:Updated|Added):\*\*\s*/, '')
+          .replace(/^\*\*(?:Updated|Added):\s*([^*]+)\*\*/, '**$1**')
+      }
+
+      function inlineMarkdown(value, kind = 'context') {
+        let output = kind === 'addition' ? cleanAdditionLabel(value) : value
+        output = escapeHtml(output)
+        output = output.replace(/\[([^\]]+)]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+        output = output.replace(/`([^`]+)`/g, '<code>$1</code>')
+        output = output.replace(/~~(.+?)~~/g, '<del>$1</del>')
+        output = output.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        return output
+      }
+
+      function lineKind(value) {
+        const trimmed = value.trim().replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '')
+        if (/^\*\*(Updated|Added)(?::|\b)/.test(trimmed)) return 'addition'
+        if (trimmed.includes('~~')) return 'removal'
+        return 'context'
+      }
+
+      function row(kind, html, lineNumber, depth = 0) {
+        const element = document.createElement('div')
+        const className = kind === 'addition' ? 'add-block' : kind === 'removal' ? 'remove-block' : 'context-block'
+        const label = kind === 'addition' ? 'Added' : kind === 'removal' ? 'Removed' : 'Unchanged'
+        element.className = `diff-row ${className}`
+        element.innerHTML = `
+          <span class="gutter" aria-hidden="true"></span>
+          <div class="content" style="padding-left: ${depth * 16 + 4}px">
+            ${html}<span class="line-ref" aria-hidden="true" title="Combined redline Markdown source line ${lineNumber}">source L${lineNumber}</span>
+            <span class="sr-only">${label} line</span>
+          </div>`
+        return element
+      }
+
+      function renderCode(lines, language) {
+        const wrapper = document.createElement('div')
+        wrapper.className = 'code-block'
+        for (const item of lines) {
+          const isDiff = language === 'diff'
+          const kind = isDiff && item.startsWith('+') ? 'addition' : isDiff && item.startsWith('-') ? 'removal' : 'context'
+          const value = isDiff && kind !== 'context' ? item.slice(1) : item
+          const line = document.createElement('div')
+          line.className = `code-line ${kind === 'addition' ? 'addition' : kind === 'removal' ? 'removal' : 'context-line'}`
+          line.innerHTML = `<span class="code-marker" aria-hidden="true"></span><span class="code-text">${escapeHtml(value) || ' '}</span>`
+          wrapper.append(line)
+        }
+        return wrapper
+      }
+
+      function renderTable(rows) {
+        const wrapper = document.createElement('div')
+        wrapper.className = 'table-wrap'
+        const table = document.createElement('table')
+        const [header, separator, ...data] = rows
+        const headings = header.split('|').slice(1, -1).map((cell) => cell.trim())
+        table.innerHTML = `<thead><tr>${headings.map((cell) => `<th>${inlineMarkdown(cell)}</th>`).join('')}</tr></thead>`
+        const tbody = document.createElement('tbody')
+        const bodyRows = separator && /^\s*\|(?:\s*:?-+.*\|)+\s*$/.test(separator) ? data : rows.slice(1)
+        for (const item of bodyRows) {
+          const cells = item.split('|').slice(1, -1).map((cell) => cell.trim())
+          const kind = lineKind(item)
+          const tr = document.createElement('tr')
+          tr.className = kind === 'context' ? 'context-block' : kind === 'addition' ? 'add-block' : 'remove-block'
+          tr.innerHTML = cells.map((cell) => `<td>${inlineMarkdown(cell, kind)}</td>`).join('')
+          tbody.append(tr)
+        }
+        table.append(tbody)
+        wrapper.append(table)
+        return wrapper
+      }
+
+      function parseMarkdown(markdown) {
+        const lines = markdown.split(/\r?\n/)
+        const fragment = document.createDocumentFragment()
+        let index = 0
+        let skippedTitle = false
+
+        while (index < lines.length) {
+          const text = lines[index]
+          const lineNumber = index + 1
+          if (!text.trim()) { index += 1; continue }
+
+          const fence = text.match(/^```(\w+)?/)
+          if (fence) {
+            const code = []
+            index += 1
+            while (index < lines.length && !lines[index].startsWith('```')) {
+              code.push(lines[index])
+              index += 1
+            }
+            fragment.append(renderCode(code, fence[1] ?? ''))
+            index += 1
+            continue
+          }
+
+          const heading = text.match(/^(#{1,3})\s+(.+)$/)
+          if (heading) {
+            const level = heading[1].length
+            if (level === 1 && !skippedTitle) { skippedTitle = true; index += 1; continue }
+            const id = slugify(heading[2]) || `section-${lineNumber}`
+            const element = document.createElement(`h${level}`)
+            element.id = id
+            element.className = 'section-heading'
+            element.innerHTML = inlineMarkdown(heading[2])
+            fragment.append(element)
+            index += 1
+            continue
+          }
+
+          if (text.trim().startsWith('|')) {
+            const rows = []
+            while (index < lines.length && lines[index].trim().startsWith('|')) {
+              rows.push(lines[index])
+              index += 1
+            }
+            fragment.append(renderTable(rows))
+            continue
+          }
+
+          if (/^\s*(?:[-*]|\d+\.)\s+/.test(text)) {
+            while (index < lines.length && /^\s*(?:[-*]|\d+\.)\s+/.test(lines[index])) {
+              const listLine = lines[index]
+              const match = listLine.match(/^(\s*)([-*]|\d+\.)\s+(.+)$/)
+              const marker = match?.[2] ?? ''
+              const content = match?.[3] ?? listLine.trim()
+              const kind = lineKind(content)
+              const prefix = kind === 'context' ? `<strong aria-hidden="true">${escapeHtml(marker)}</strong> ` : ''
+              fragment.append(row(kind, `<p>${prefix}${inlineMarkdown(content, kind)}</p>`, index + 1, Math.floor((match?.[1].length ?? 0) / 2)))
+              index += 1
+            }
+            continue
+          }
+
+          const paragraph = [text.trim()]
+          index += 1
+          while (
+            index < lines.length &&
+            lines[index].trim() &&
+            !/^(#{1,3})\s+/.test(lines[index]) &&
+            !lines[index].startsWith('```') &&
+            !lines[index].trim().startsWith('|') &&
+            !/^\s*(?:[-*]|\d+\.)\s+/.test(lines[index])
+          ) {
+            paragraph.push(lines[index].trim())
+            index += 1
+          }
+          const value = paragraph.join(' ')
+          const kind = lineKind(value)
+          fragment.append(row(kind, `<p>${inlineMarkdown(value, kind)}</p>`, lineNumber))
+        }
+        return fragment
+      }
+
+      for (const button of document.querySelectorAll('[data-filter-button]')) {
+        button.addEventListener('click', () => {
+          document.body.dataset.filter = button.dataset.filterButton
+          document.querySelectorAll('[data-filter-button]').forEach((peer) => {
+            peer.setAttribute('aria-pressed', String(peer === button))
+          })
+        })
+      }
+      document.querySelector('#print').addEventListener('click', () => window.print())
+
+      const embeddedSource = document.querySelector('#embedded-markdown')?.textContent
+      const markdownRequest = embeddedSource
+        ? Promise.resolve(embeddedSource)
+        : fetch(sourceUrl).then((response) => {
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            return response.text()
+          })
+
+      markdownRequest
+        .then((markdown) => {
+          body.replaceChildren(parseMarkdown(markdown))
+        })
+        .catch((error) => {
+          body.innerHTML = `<div class="load-error"><strong>Unable to load the Markdown redline.</strong><br />Serve this directory over HTTP, or open <a href="${sourceUrl}">the Markdown version</a> directly.<br /><code>${escapeHtml(error.message)}</code></div>`
+        })
+    </script>
+  </body>
+</html>
