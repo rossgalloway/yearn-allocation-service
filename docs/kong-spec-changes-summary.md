@@ -2,134 +2,141 @@
 
 Reference: [Original Kong allocation history spec](https://hackmd.io/@murderteeth/rJkQlX-AWx)
 
-See [kong-allocation-history-spec-redline.md](./kong-allocation-history-spec-redline.md) for a complete manual diff against
-the original text.
+This document is a short, standalone summary. The complete proposed contract is in
+[kong-allocation-history-spec-proposed.md](./kong-allocation-history-spec-proposed.md).
 
 ## Goal
 
-Envio should index blockchain events. Kong should enrich those events, build one normalized allocation model, and serve that
-model in two ways:
+Envio indexes blockchain events. Kong enriches those events, builds one normalized allocation model, and serves it in two
+ways:
 
-- **GraphQL:** flexible and detailed queries
-- **REST:** fast, limited responses for websites and charts
+- **GraphQL:** flexible access to normalized data and detailed evidence
+- **REST:** a small, fast chart response for public websites
 
-GraphQL and REST should use the same enriched and validated data and not rebuild the history separately.
+Both APIs read the same saved materialization run. They must not rebuild or classify history separately.
 
 ```text
 Blockchain
     ↓
-Envio indexing and GraphQL
+Envio: events and indexing coverage
     ↓
-Kong RPC enrichment and processing
+Kong: RPC enrichment, grouping, classification, and validation
     ↓
-One normalized allocation model
-    ├── GraphQL: normalized data and detailed evidence
-    └── REST: precomputed entries and chart data
+One saved allocation model
+    ├── GraphQL: detailed normalized data
+    └── REST: precomputed chart data
 ```
 
 ## Data Kong gets from Envio
 
-Envio owns event indexing. Kong should not scan blockchain logs itself.
+Envio is the only blockchain indexer. Kong does not scan logs itself.
 
-For every event, Kong needs the chain, vault, source contract, decoded arguments, block information, transaction hash and
-position, log index, and strategy address when relevant.
+For each event, Kong needs the chain, vault, source contract, decoded arguments, block and transaction order, transaction hash,
+log index, and strategy address when relevant.
 
-The original event list is mostly correct. It covers debt changes, reports, strategies, vault configuration, roles, queues,
-debt allocators, allocator ratios, keepers, governance, and debt purchases.
+The original event list remains useful. The proposed contract also requires:
 
-We added `Deposit` and `Withdraw`. These are context events. They often explain a debt change, but they do not normally create
-an allocation action by themselves.
+- `Deposit` and `Withdraw` as context for deposits, withdrawals, and debt changes
+- Vault-specific debt allocator assignment events
+- Legacy and shared-allocator strategy-ratio events
+- Indexing coverage and known-gap records
 
-Envio should also provide coverage records, accounting checkpoints, known gaps, and unresolved checkpoint failures. This lets
-Kong decide whether the indexed history is complete and safe to publish.
-
-The prototype currently combines individual Envio event tables with normalized `AllocationSourceEvent` rows because normalized
-coverage is incomplete. The cleaner Kong contract is one complete normalized Envio interface, including the shared allocator's
-vault-specific ratio events.
+Envio does not need to provide RPC-enriched accounting snapshots for this design. Kong gets exact historical state from archive
+RPC. An Envio PR that adds the required event coverage is already open. Its event set and historical backfill are prerequisites
+before production activation.
 
 ## Data Kong gets from RPC
 
-Envio shows that something happened. RPC reads prove the exact vault state and help explain how it happened.
+Envio proves which events happened. RPC reads prove the exact state and provide execution evidence.
 
-For an action at block `N`, archive RPC provides the state at `N - 1` and `N`. For an action across several blocks, Kong reads
-before the first transaction and after the last transaction.
+For a single-block action, Kong reads state immediately before and after that block. For a multi-block action, Kong reads before
+the first transaction and after the last transaction.
 
-Historical reads include:
+Archive RPC provides:
 
 - Vault `totalAssets`, `totalDebt`, and `totalIdle`
 - Strategy debt, activation, report time, and maximum debt
-- The active debt allocator and each strategy's target and maximum ratios
-- `shouldUpdateDebt` before allocator actions
-- Transaction traces and call paths
+- Historical allocator assignments and strategy target and maximum ratios
+- Historical `shouldUpdateDebt` results
+- Transaction traces, call paths, and role evidence
 
-Current RPC reads provide the latest safe block, current allocation, vault metadata, strategy names, and current strategy
-status. One archive provider may provide both historical and current reads.
+Current RPC provides the latest safe block, current state, vault metadata, strategy names, and current strategy status. The same
+RPC provider may serve both roles if it supports historical reads.
 
 ## Shared Kong data model
 
-Most of the original normalized structure remains useful behind both APIs.
+Most of the original normalized model remains useful.
 
-| Original object | Recommended change |
+| Original object | Proposed treatment |
 | --- | --- |
 | `vault` | Keep. |
-| `strategies` | Keep. Read current status from the latest safe RPC state. |
-| `states` | Keep. Include action boundary snapshots and the current safe snapshot. |
-| `events` | Keep as raw Envio evidence. |
-| `transitions` and `effects` | Keep for atomic transaction and event changes. |
-| `doa` | Replace the one-to-one annotation with a reusable allocation policy. |
-| `pendingDoaProposals` | Replace time-based stale states with states such as unmatched or superseded. |
+| `strategies` | Keep every strategy seen in history. Report its status at the latest safe block. |
+| `states` | Keep. Add action-boundary states and the latest safe state. Each state contains the strategies known at that block. |
+| `events` | Keep as normalized Envio evidence. |
+| `transitions` and `effects` | Keep for atomic block, transaction, and event changes. |
+| `doa` | Replace a one-to-one execution annotation with a reusable allocation policy. |
+| `pendingDoaProposals` | Use evidence-based `unmatched` or `superseded` states. Do not make a proposal stale only because it is old. |
 
-The main new object is a grouped allocation action. REST currently calls this an `entry`.
+The main addition is a grouped allocation action. REST calls its compact projection an entry.
 
 ```text
 Allocation action
-    ├── state before and after the whole action
-    ├── one or more transactions
-    ├── atomic transitions and source events
-    ├── economic action kind
-    ├── execution and actor information
+    ├── exact state before and after the whole action
+    ├── one or more transitions and transactions
+    ├── economic result
+    ├── execution method and actors
     ├── configuration or lifecycle operations
-    └── related allocation policy, when known
+    └── policy relationship, when known
 ```
-
-GraphQL should preserve both atomic transitions and grouped actions.
 
 ## Main processing changes
 
-### Before and after states
+### Read exact boundaries
 
-The original spec linked an event state to the previous event state. Kong should read the state immediately before and after
-each action. This prevents unrelated deposits, withdrawals, reports, or gains from becoming part of the allocation change.
+Kong reads the state immediately before and after each action. It does not use the previous allocation action's final state as
+the next action's initial state. Deposits, withdrawals, reports, gains, and losses may happen between actions.
 
-### Multi-transaction actions
+### Group related transactions
 
-One keeper or manual action can span several transactions and blocks. Kong may group them when call paths, allocator state,
-roles, timing, and state continuity show that they belong together. Time alone is not enough.
+One keeper or manual action can span several transactions and blocks. Kong groups transitions only when call paths, allocator
+state, roles, timing, and state continuity support the relationship. Time alone is not enough.
 
-### Action and execution are separate
+A block-level transition may contain several transactions. Therefore it has `transactionHashes[]` and `effects[]`; each effect
+keeps its own transaction and execution evidence.
 
-The original `kind` mixed what changed with how it happened. The new model separates:
+### Separate result from execution
 
-- `kind`: idle deployment, idle deallocation, strategy reallocation, configuration change, or lifecycle change
-- `execution.automation`: automatic, manual, or unknown
-- `execution.mechanism`: allocator keeper, direct vault call, or another path
-- `execution.targetStatus`: matched, overridden, or unavailable
+The economic `kind` says what changed: idle deployment, idle deallocation, strategy reallocation, configuration change, or
+strategy lifecycle change.
 
-A strategy reallocation can be automatic or manual. Moving idle into one strategy is an idle deployment, even when an
-allocator performs it.
+Separate fields say how it happened:
 
-### DOA is a policy
+- `execution.automation`: automatic, manual, mixed, or unknown
+- `execution.mechanism`: allocator keeper, direct vault role, governance, or another path
+- `execution.targetStatus`: matched, overridden, unavailable, or not applicable
 
-A DOA proposal describes target allocations. It does not prove that an execution happened. One policy can govern several
-later actions. Kong should record whether a policy was applied, governed a later action, or only matched historical target
-configuration. Proposal age alone should not make it stale.
+For example, target maintenance is an automatic strategy reallocation under a matched policy. An allocator override is a
+manual or non-policy strategy reallocation. Moving idle into one strategy remains an idle deployment, regardless of who calls
+it.
 
-DOA data is optional enrichment. A DOA outage must not stop executed history from updating.
+Pure withdrawal-driven debt updates remain atomic evidence and interval flows, but do not become standalone allocation actions.
+This filter does not remove manual emergency deallocations, governance or administrator actions, bad-debt purchases,
+configuration changes, or lifecycle changes.
 
-### Evidence and accounting
+### Treat DOA as policy
 
-`transactionFrom` is not enough for Safe or relayed transactions. Kong combines Envio metadata, traces, historical roles,
-allocator configuration, and `shouldUpdateDebt` replay to identify the actor, authorization, automation, and target match.
+A DOA proposal defines target allocations. It does not prove that execution happened. One policy can govern several later
+actions.
+
+Use two relationship names:
+
+- `applied_in_action`: the action applied the policy configuration
+- `governing_policy`: a later action executed under that active configuration
+
+An archive-RPC target match can support `inferred_from_historical_config`, but it is not a third relationship type. DOA data is
+optional enrichment, so its failure must not stop executed history from updating.
+
+### Reconcile chart intervals
 
 Every snapshot must satisfy:
 
@@ -138,62 +145,80 @@ sum of strategy debt = total debt
 total debt + total idle = total assets
 ```
 
-For charts, Kong also builds a raw-unit flow ledger between visible actions. It includes debt movements, deposits,
-withdrawals, reports, gains, losses, and refunds. Anything not explained remains `unattributed_asset_change`.
+For each idle or strategy node in a chart interval:
 
-Only an exact same-block Envio checkpoint that agrees with RPC may provide `unallocatedBps`. Missing evidence is `null`, not
-zero.
+```text
+opening balance
++ attributed inflows
+- attributed outflows
++ unattributed balancing inflows
+- unattributed balancing outflows
+= closing balance
+```
+
+Amounts are raw underlying asset units. Deposits, withdrawals, and report refunds use the `external` boundary because they are
+literal asset flows. Reported gains and losses use the `accounting` boundary because they do not imply an external token
+transfer. Unknown balancing changes remain explicit `unattributed_asset_change` flows. `unattributedAmount` is the sum of their
+absolute amounts.
+
+The separate `unallocatedBps` field is a design choice for the Kong maintainer. The chart already provides `totalAssets` and
+`totalIdle`, so it does not depend on that field.
 
 ## GraphQL output
 
-Kong GraphQL should expose the normalized model and its relationships:
+GraphQL exposes the saved normalized model and its relationships:
 
-- Vaults, strategies, and allocation states
-- Grouped actions and atomic transitions
-- Transactions, operations, and source events
-- Policies and the actions they govern
-- Traces, roles, trigger replay, and classification evidence
-- Reconciled intervals and unattributed changes
+- Vaults, the global strategy directory, and historical states
+- Grouped actions, calculated changes, and atomic transitions
+- Transactions, operations, and normalized Envio source events
+- Policies and the actions they apply to or govern
+- Traces, roles, allocator trigger replay, grouping evidence, and classification evidence
+- Reconciled intervals, node residuals, and unattributed changes
 - Coverage and data-quality information
 
-GraphQL is suitable for investigation, debugging, and detailed tools. Clients can select only the fields they need.
-
-The prototype does not implement this Kong GraphQL API. It builds normalized objects in memory, while Postgres mainly stores
-completed REST entries. Kong should store the normalized model if GraphQL must query it without repeating Envio and RPC work.
+GraphQL is the drill-down interface for investigation and detailed tools. Clients can select only the fields they need. Normal
+queries do not repeat Envio ingestion or RPC enrichment. The Kong maintainer owns the final GraphQL query names, connections,
+pagination, authorization, and rate limits.
 
 ## REST output
 
-REST is the fast public interface for website hydration and charts.
+The required REST surface is the public chart response:
 
 ```text
-GET /api/rest/views/allocation-history/:chainId/:address
 GET /api/rest/views/allocation-history/:chainId/:address?projection=chart
-GET /api/rest/views/allocation-history/:chainId/:address/entries/:entryId?runId=...
 ```
 
-The full REST projection returns complete entries with embedded before and after states, strategy changes, transactions,
-execution information, relevant policies, and classification evidence.
+It returns:
 
-The compact chart projection returns only visible strategy reallocations, their raw after states, the current snapshot,
-execution labels, expected APR when available, and reconciled interval flows. Deposits, withdrawals, reports, and idle
-movements do not fill the chart timeline, but their data is still used inside the intervals between visible points. Strategy
-names and cursor-page boundary states are deduplicated at the response level. Detailed evidence remains available through each
-entry's detail link.
+- `runId`, so GraphQL can select the same immutable materialization
+- Vault and strategy display information
+- Visible strategy-reallocation entries with stable grouped-action IDs
+- The raw after-state for each entry
+- A current safe snapshot on the first page
+- Automation, mechanism, and target-status labels
+- Expected DOA APR data when available
+- Reconciled interval flows containing hidden deposits, withdrawals, reports, idle movements, and other changes
+- A stable cursor, newest-first by default, with optional oldest-first traversal
 
-Entries are newest first by default. Stable cursors keep pagination on one materialization run.
+There is no required REST detail route. A client uses an entry's action ID and the response `runId` to request its exact before
+and after states, calculated changes, transactions, operations, policy, traces, and evidence through GraphQL. REST requests read
+saved data only; they do not call Envio or RPC. Kong should use its normal caching, CORS, validation, and response-compression
+practices.
+
+### Optional full REST projection
+
+Kong may also support `projection=full` for clients that need complete denormalized entries without GraphQL. Each entry embeds
+the whole-action `before`, `after`, and server-calculated `changes`, plus transitions, operations, execution information,
+classification, and policy data. This is an optional compatibility surface, not a requirement for the chart design.
 
 ## Storage and refresh
 
-The original spec proposed one Redis blob per vault. The prototype instead builds an immutable Postgres run, validates it, and
-activates it in one transaction. A failed refresh leaves the previous run active.
+The original spec proposed one Redis blob per vault. The new model needs queryable normalized storage for GraphQL and a saved
+chart projection for REST. The exact database schema is left to the Kong maintainer.
 
-For Kong, the clean target is:
+Each materialization run is immutable. Kong validates a new run before activation, and a failed run leaves the previous run
+active. Cursors remain pinned to one run.
 
-1. Store the normalized states, actions, policies, events, and evidence needed by GraphQL.
-2. Build the REST and chart projections from the same run.
-3. Activate all projections together after validation.
-4. Add incremental refresh and a retention policy before broad production use.
-
-The prototype currently performs a complete replay and only covers Ethereum `yvUSDC-1`, `yvUSDT-1`, and `yvUSD`. It can
-publish clearly marked provisional test runs when Envio coverage is incomplete. That exception should not become the Kong
-production default.
+Backfill and incremental refresh use the same ingestion, enrichment, grouping, classification, policy, interval, and validation
+logic. Production operation requires incremental tail processing and an old-run retention policy. Supported vaults should be
+discovered from Kong's Yearn V3 vault list instead of hardcoded.

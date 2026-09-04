@@ -2,9 +2,7 @@
 
 Source: [Vault Allocation History — Spec (Re-spec of Kong #396)](https://hackmd.io/@murderteeth/rJkQlX-AWx)
 
-Clean version: [Proposed Kong allocation history specification](https://artifacts.yearn.dev/1y/6532c957e3ef76e6d1313e4f6984efca.md)
-
-This document keeps the complete original spec and shows the proposed changes from the allocation-history prototype.
+This document keeps the complete original spec and shows the proposed changes to the Kong allocation-history design.
 
 - ~~Struck-through text~~ is removed or replaced.
 - **Updated:** text is the proposed replacement.
@@ -17,7 +15,7 @@ This is a proposal for discussion. It is not the final Kong implementation plan.
 
 Provide Kong API consumers with a vault-scoped allocation timeline that explains how debt was distributed across strategies over time, and what kind of activity produced each change. ~~Consumers render charts/panels directly from the response, with no event replay or archive RPC calls of their own.~~
 
-**Updated:** Kong builds one enriched and validated allocation model. GraphQL exposes flexible normalized data and detailed evidence. REST exposes fast, precomputed entries for charts and websites. Neither consumer needs to replay events or make archive RPC calls.
+**Updated:** Kong builds one enriched and validated allocation model. GraphQL exposes flexible normalized data and detailed evidence. REST exposes a fast, precomputed chart response for websites. Neither consumer needs to replay events or make archive RPC calls.
 
 **Added:** Envio owns blockchain indexing. Kong reads indexed data from Envio, performs RPC enrichment, and uses the same materialized data for GraphQL and REST.
 
@@ -32,7 +30,8 @@ Provide Kong API consumers with a vault-scoped allocation timeline that explains
 For a given `(chainId, vault)`:
 
 - **Vault metadata** — name, symbol, asset, decimals
-- **Strategy directory** — every strategy ever interacted with, plus current activity status
+- ~~**Strategy directory** — every strategy ever interacted with, plus current activity status~~
+- **Updated: Strategy directory** — every strategy seen during the materialized history, plus its status at the latest safe block
 - ~~**Allocation states** — block-end snapshots of debt distribution~~
 - **Updated: Allocation states** — exact snapshots immediately before and after each action, plus the latest safe snapshot
 - ~~**Allocation transitions** — what changed between consecutive states, classified by intent, with actor metadata and `effects[]` for mixed same-block activity~~
@@ -50,7 +49,7 @@ For a given `(chainId, vault)`:
 
 ~~Response uses the `VaultAllocationTimeline` schema (see Appendix).~~
 
-**Updated:** Kong stores a normalized allocation model for GraphQL and derives denormalized REST entry and chart projections from the same materialization run. See the Appendix.
+**Updated:** Kong stores a normalized allocation model for GraphQL and derives the REST chart projection from the same materialization run. A denormalized full REST projection is an optional extension. See the Appendix.
 
 ## 4. Timeline format
 
@@ -86,28 +85,49 @@ Without this contract, a chart renderer assuming timeseries semantics will draw 
 
 Actor classification and evidence run per transaction. A policy relationship is separate from both the economic kind and execution provenance.
 
+**Added:** Useful presentation labels can be derived without adding more action kinds:
+
+- **Target maintenance:** an automatic `strategy_reallocation` executed by an allocator keeper under a matched governing policy.
+- **Allocator override:** a manual or otherwise non-policy `strategy_reallocation` whose allocator targets were overridden or unavailable.
+
+**Added:** Pure withdrawal-driven debt updates are context, not standalone allocation actions. They remain atomic transitions and contribute to interval accounting. This filter must not hide manual emergency deallocations, governance or administrator actions, bad-debt purchases, configuration changes, or strategy lifecycle changes.
+
 ## 6. Invariants
 
 - ~~On-chain events are canonical truth. DOA records are annotations only; a DOA record alone never produces an executed state.~~
 - **Updated:** Envio-indexed on-chain events are canonical execution evidence. Archive RPC reads are canonical snapshot evidence. DOA records are optional policy data and never create executed state by themselves.
 - ~~Historical states reconcile to on-chain truth: `sum(strategy.currentDebt) + totalIdle ≈ totalAssets` at the relevant block. Bps computed from raw integers, not pre-rounded.~~
 - **Updated:** Every published snapshot reconciles exactly: `sum(strategy.currentDebt) = totalDebt` and `totalDebt + totalIdle = totalAssets`. Bps are computed from raw integers, not pre-rounded.
-- Strategy directory at any historical block includes all strategies ever seen up to that block, including revoked-with-nonzero-debt.
+- ~~Strategy directory at any historical block includes all strategies ever seen up to that block, including revoked-with-nonzero-debt.~~
+- **Updated:** The top-level strategy directory contains every strategy seen during the materialized history and reports status at the latest safe block. Each historical state uses the strategy universe known at that block, including revoked strategies with nonzero debt.
 - ~~State and transition IDs are deterministic, derivable from `(chainId, vault, blockNumber)`.~~
 - **Updated:** State, transition, action, policy, and interval IDs are deterministic. Action IDs include the chain, vault, and action block range or equivalent stable transaction identity.
 - Multiple relevant events in the same block collapse into one block-end state, with `effects[]` capturing each contributing event/transaction.
 - **Added:** Related transitions may form one multi-block action only when state continuity and execution evidence support the grouping.
 - Frontend is render-only: response must not require archive RPC, event replay, or knowledge of internal storage.
 - **Added:** Every tracked idle and strategy node in a chart interval must reconcile independently. Unknown balancing changes remain explicit `unattributed_asset_change` flows.
-- **Added:** Only an exact same-block Envio checkpoint that agrees with the RPC totals may populate `unallocatedBps`. Missing evidence is `null`, not zero.
+- **Added:** Missing values are `null`, not zero. Kong never invents a ratio when its required source evidence is unavailable.
 - **Added:** GraphQL and REST are projections of the same materialization run and must not classify or reconstruct the same action differently.
+
+**Added:** For every idle or strategy node in an interval:
+
+```text
+opening balance
++ attributed inflows
+- attributed outflows
++ unattributed balancing inflows
+- unattributed balancing outflows
+= closing balance
+```
+
+**Added:** `unattributedAmount` is the sum of the absolute amounts of all `unattributed_asset_change` flows. Deposits, withdrawals, and report refunds are literal flows through the `external` boundary. Reported gains and losses are accounting changes through the `accounting` boundary; they do not imply a token transfer. External and accounting boundaries do not have opening or closing balances.
 
 ## 7. Architecture
 
 ### 7.1 Data sources
 
 - ~~**Envio (self-hosted)** — event logs + transaction-level data (`tx.from`, `tx.to`, function selector). Connection details, schema, and query interface — see §12 (TBD).~~
-- **Updated: Envio** — the only blockchain indexer. Kong reads a complete normalized event interface through Envio GraphQL. Each event includes decoded arguments, source contract, vault, block and transaction ordering, transaction hash, and strategy address when relevant. Envio also exposes coverage, accounting checkpoints, known gaps, and unresolved checkpoint failures.
+- **Updated: Envio** — the only blockchain indexer. Kong reads a complete normalized event interface through Envio GraphQL. Each event includes decoded arguments, source contract, vault, block and transaction ordering, transaction hash, and strategy address when relevant. Envio also exposes indexing coverage and known gaps.
 - **Added:** `Deposit` and `Withdraw` are context events. They help explain debt changes but do not normally create allocation actions by themselves.
 - **Added:** Envio must normalize legacy and shared-allocator event shapes, including vault-specific allocator assignment and strategy-ratio changes.
 - ~~**DOA proposal source** — see §12 (TBD). Needs a defined contract before implementation.~~
@@ -142,11 +162,11 @@ Actor classification and evidence run per transaction. A policy relationship is 
 
 ~~The trailing entry of `states` is the live tail when present (`stateGranularity: 'latest'`); the trailing entry of `transitions` is the live tail when present (`kind: 'current_live_tail'`). Two cursors because on-chain events and DOA records run on different clocks.~~
 
-**Updated:** Store normalized states, atomic transitions, grouped actions, policies, source evidence, and data quality for GraphQL. Store full-entry and compact-chart REST projections from the same run. Activate all projections together only after validation.
+**Updated:** Store normalized states, atomic transitions, grouped actions, policies, source evidence, and data quality for GraphQL. Store the compact REST chart projection from the same run. A full REST projection may be added as described in the REST addendum. Activate all enabled projections together only after validation.
 
 **Added:** REST cursors pin the immutable run, direction, projection, and last keyset position. A refresh cannot change an in-progress traversal.
 
-**Added:** The prototype stores completed REST projections in Postgres but builds much of the normalized model in memory. Kong should persist the normalized model if GraphQL must query it without repeating Envio and RPC work.
+**Added:** Kong must persist the normalized model so GraphQL can query it without repeating Envio ingestion or RPC enrichment.
 
 ### 7.3 Refresh jobs ~~— GitHub Actions~~
 
@@ -168,7 +188,7 @@ Actor classification and evidence run per transaction. A policy relationship is 
 
 **Updated:** Only one materialization may run for a vault at a time. A failed or interrupted run never replaces the last successful run. A full rebuild must produce the same result as incremental processing for the same safe block and source revisions.
 
-**Added:** The current prototype refresh performs a complete replay. Incremental tail processing and old-run retention must be completed before broad production use.
+**Added:** An initial implementation may use complete replay, but production operation requires incremental tail processing and an explicit old-run retention policy.
 
 ### 7.4 Vault list
 
@@ -185,28 +205,48 @@ WHERE label = 'vault'
   AND defaults->>'origin' = 'yearn';
 ```
 
-**Added:** The prototype rollout is limited to Ethereum `yvUSDC-1`, `yvUSDT-1`, and `yvUSD`. This is a testing limit, not the final Kong scope.
+**Added:** The Kong implementation should discover supported Yearn V3 vaults through the vault list rather than hardcode a test-vault list.
 
 ### 7.5 GraphQL endpoint
 
 **Added:** Kong GraphQL reads the normalized active materialization run. It exposes paginated connections for strategies, states, grouped actions, atomic transitions, policies, intervals, and source events. Detailed trace, role, trigger-replay, grouping, and classification evidence is available when requested.
 
+**Added:** GraphQL must allow a client to select a materialization by `runId` and a grouped action by its stable action `id`. This is the drill-down path from a REST chart entry.
+
 **Added:** GraphQL may be slower and more flexible than REST, but it must not run a separate history reconstruction. Normal GraphQL reads should not repeat Envio ingestion or archive RPC enrichment.
 
 ### 7.6 REST endpoint
 
-Lives at `packages/web/app/api/rest/views/allocation-history/[chainId]/[address]/route.ts`. Behaves like other Kong REST endpoints:
+~~Lives at `packages/web/app/api/rest/views/allocation-history/[chainId]/[address]/route.ts`. Behaves like other Kong REST endpoints:~~
 
 - ~~Reads `allocation-history:{chainId}:{vaultLower}:blob`, strips internal cursor fields, returns the result~~
-- **Updated:** Reads the active immutable materialization run from Kong storage and returns a keyset-paginated, denormalized `entries` array
-- **Added:** `projection=chart` returns only visible strategy reallocations, a separate current snapshot, expected APR information when available, and reconciled intervals containing all hidden activity between those visible points
-- **Added:** `/entries/:entryId?runId=...` returns the full evidence-rich entry for a chart item
+
+**Updated:** The required REST surface is the public chart response:
+
+```text
+GET /api/rest/views/allocation-history/:chainId/:address?projection=chart
+```
+
+**Added:** It reads the active immutable materialization run from Kong storage. A REST request never calls Envio or RPC. It accepts `limit`, `direction`, and an opaque keyset `cursor` tied to the run, direction, and projection.
+
+**Added:** The chart returns only visible strategy reallocations, a separate current snapshot on the first page, expected APR information when available, and reconciled intervals containing all hidden activity between visible points. Detailed evidence remains in GraphQL.
+
+**Added:** The chart response includes `runId` and stable grouped-action IDs. GraphQL uses both values for drill-down. No separate REST detail route is required.
+
+**Added:** Each chart entry `id` is the corresponding grouped action ID. Interval `fromEntryId` and `toEntryId` values use those same IDs.
+
+#### Optional full REST projection
+
+**Added:** Kong may also provide `projection=full` for consumers that need complete denormalized entries without GraphQL. Each entry embeds its whole-action before and after states, calculated changes, grouped transitions, operations, execution information, classification, and matched policy when available.
+
+The REST endpoint otherwise behaves like existing Kong endpoints:
+
 - Same `Cache-Control` posture as existing REST routes (`max-age=900, s-maxage=900, stale-while-revalidate=600`)
 - **Added:** Provisional test data is marked clearly and uses `Cache-Control: no-store`; production Kong remains certified-only by default
 - CORS headers
 - ~~Validates params, returns 400 on invalid, 404 on missing cache~~
 - **Updated:** Validates parameters and cursors, returns 400 on invalid input, and returns 404 when the requested vault, run, or entry is not materialized
-- **Added:** Defaults to newest-first order, supports oldest-first order, and returns an opaque cursor pinned to the run and projection
+- **Added:** Uses Kong's normal response compression when required by payload size and existing deployment conventions
 
 ### 7.7 Code layout
 
@@ -233,7 +273,7 @@ Lives at `packages/web/app/api/rest/views/allocation-history/[chainId]/[address]
 - Interval-flow reconciliation
 - Materialization storage and activation
 - GraphQL resolvers
-- REST full-entry and chart projections
+- REST chart projection and optional full-entry projection
 - Tests for pure processing, database activation, GraphQL, and REST contracts
 
 ~~GH Actions workflow at `.github/workflows/allocation-history.yml` invokes the refresh via a bun-executed entrypoint.~~
@@ -250,7 +290,7 @@ Lives at `packages/web/app/api/rest/views/allocation-history/[chainId]/[address]
 
 **Updated:** Do not use elapsed-time constants to decide whether a policy was applied or became stale. Policy status is based on on-chain configuration evidence and whether a newer policy superseded it.
 
-**Added:** A short execution-grouping time window may be supporting evidence, but never sufficient evidence. The prototype uses one hour together with matching call paths, allocator configuration, roles, and state continuity.
+**Added:** A configurable execution-grouping time window may be supporting evidence, but never sufficient evidence. Grouping also requires compatible call paths, allocator configuration, roles, and state continuity.
 
 ## 9. DOA processing
 
@@ -274,7 +314,7 @@ Lives at `packages/web/app/api/rest/views/allocation-history/[chainId]/[address]
 2. Mark policy application `confirmed` only when an indexed allocator configuration event exactly matches the targets.
 3. Mark it `inferred_from_historical_config` when an archive-RPC configuration read exactly matches but the indexed application event is unavailable.
 4. Treat keeper identity, debt direction, and timestamp proximity only as supporting evidence. They never confirm policy application alone.
-5. Keep an applied policy active until a newer policy supersedes it. One policy may govern many later keeper actions.
+5. Keep an applied policy active until a newer policy supersedes it. One policy may govern many later keeper actions. A relationship is `applied_in_action` when the action applies the configuration and `governing_policy` when a later action executes under it.
 6. Keep unapplied policies `unmatched` or `superseded`. Do not make them stale only because time passed.
 7. Reprocess affected policy relationships when late Envio or DOA data arrives.
 
@@ -300,7 +340,7 @@ Both incremental and full refreshes call this function unchanged.
    - ~~allocator `getStrategyTargetRatio(s)` and `getStrategyMaxRatio(s)` if allocator exists at the block~~
    - **Updated:** shared allocator `getStrategyConfig(vault,s)` if an allocator exists at the block; decode membership, target ratio, and maximum ratio
 4. **Bps from raw integers.** If `totalAssets == 0`, bps are 0; raw debts kept.
-5. **Added: Checkpoint provenance.** Populate `unallocatedBps` only when an exact same-block Envio checkpoint is canonical, reconciled, and byte-for-byte equal to the RPC totals.
+5. **Added: Unavailable-value provenance.** Preserve raw RPC totals and use `null` for any enrichment whose required source evidence is unavailable.
 6. **Added: Execution evidence.** Read transaction traces, historical role evidence, and allocator `shouldUpdateDebt` results needed for later grouping and classification.
 7. **Added: Validation.** Require strategy-debt sum to equal total debt and total debt plus total idle to equal total assets before publication.
 
@@ -318,16 +358,16 @@ Envio must expose these for every Kong-supported chain:
 - **Added: Vault allocator assignment:** `UpdateDebtAllocator` or the equivalent event for the deployed vault version
 - ~~**Debt allocator:** `UpdateStrategyDebtRatios`, `UpdateKeeper`, `GovernanceTransferred`~~
 - **Updated: Debt allocator:** both `UpdateStrategyDebtRatio` and `UpdateStrategyDebtRatios` contract variants, `UpdateKeeper`, `GovernanceTransferred`
-- **Added: Validation entities:** `VaultAllocationCoverage`, `VaultAccountingCheckpoint`, and `VaultAccountingCheckpointFailure`, or equivalent normalized Envio entities
+- **Added: Validation entities:** indexing coverage and known-gap metadata sufficient to prove that the required event range is complete
 
-If Envio coverage is partial, indexing the missing events upstream is a prerequisite to this work.
+**Updated:** If Envio coverage is partial, indexing and backfilling the missing events upstream is a prerequisite to this work. An Envio event-coverage PR is already in progress; Kong implementation should begin only after its required event set and historical backfill are available.
 
-**Added:** The prototype may use explicitly marked provisional data for testing. Production Kong must not silently accept incomplete event or checkpoint coverage.
+**Added:** Non-production environments may use explicitly marked provisional data for testing. Production Kong must not silently accept incomplete event coverage or failed RPC enrichment.
 
 ## 12. TBDs ~~(block implementation)~~
 
 - ~~**Envio interface** — connection (GraphQL? direct Postgres?), schema, auth, network access from the GH Actions runner. Owner: ?~~
-- **Updated: Envio interface** — GraphQL is the proposed Kong input. Finalize the normalized event, coverage, checkpoint, pagination, authentication, and network contract between Envio and Kong.
+- **Updated: Envio interface** — GraphQL is the proposed Kong input. Finalize the normalized event, coverage, pagination, authentication, and network contract between Envio and Kong.
 - ~~**Envio coverage** — confirm every event in §11 is indexed across all six chains; backfill missing ones if not.~~
 - **Updated: Envio coverage** — add the §11 context and shared-allocator events, certify each supported chain, and backfill missing history before production activation.
 - ~~**DOA proposal interface** — confirm doa type inteface~~
@@ -363,17 +403,18 @@ If Envio coverage is partial, indexing the missing events upstream is a prerequi
 
 - ~~**Address labels** — per-chain keeper/applicator addresses for actor classification~~
 - **Updated: Actor evidence** — define how Kong obtains keeper labels, Safe and relayer identities, historical vault role masks, and allocator address history for every chain.
-- **Added: Kong GraphQL schema** — finalize connections, pagination, authorization, and rate limits for normalized states, actions, policies, events, traces, roles, and intervals.
+- **Added: Kong GraphQL schema** — the Kong maintainer owns the final query names, connections, pagination, authorization, and rate limits for normalized states, actions, policies, events, traces, roles, and intervals.
 - **Added: Normalized storage** — decide which normalized Envio and RPC evidence Kong persists so GraphQL does not repeat expensive enrichment work.
 - **Added: Incremental materialization** — define the immutable historical prefix, mutable tail, reclassification window, cursor lifetime, and old-run retention policy.
 - **Added: Unlimited max debt** — define a safe GraphQL and REST representation for `uint256.max` without JavaScript number loss.
+- **Added: Unallocated ratio** — decide whether the normalized model needs a distinct `unallocatedBps` field. The chart already exposes raw `totalAssets` and `totalIdle`; it must not depend on Envio RPC-enriched checkpoints.
 
 ## 13. Acceptance
 
 Feature is complete when:
 
 1. ~~`GET /api/rest/views/allocation-history/:chainId/:address` returns a `VaultAllocationTimeline` derived from the cached blob.~~
-   **Updated:** Kong materializes one validated normalized history and serves it through GraphQL plus the full-entry and chart REST projections.
+   **Updated:** Kong materializes one validated normalized history and serves it through GraphQL plus the REST chart projection. A full REST projection is optional.
 2. All invariants in §6 hold.
 3. All event sources in §11 are reflected in classification and state.
 4. ~~DOA records are returned as annotations or as `pendingDoaProposals` per §9; no DOA record creates an executed state.~~
@@ -386,7 +427,7 @@ Feature is complete when:
 9. **Added:** REST requests use only materialized storage and do not call Envio, RPC, or DOA services at request time.
 10. **Added:** GraphQL and REST resolve from the same materialization run and agree on shared state, action, policy, and evidence fields.
 11. **Added:** Failed or incomplete materialization never replaces the last successful active run.
-12. **Added:** Production data fails closed when Envio coverage, checkpoint evidence, archive RPC reads, or accounting validation is incomplete.
+12. **Added:** Production data fails closed when Envio event coverage, archive RPC reads, or accounting validation is incomplete.
 
 ## Appendix — Type definitions
 
@@ -536,7 +577,6 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +
 + // Shared normalized model used by GraphQL and REST materialization.
 + type VaultAllocationModel = {
-+   schemaVersion: 2
 +   generatedAt: number
 +   runId: string
 +   dataQuality: AllocationDataQuality
@@ -585,9 +625,6 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   totalAssets: string
 +   totalDebt: string
 +   totalIdle: string | null
-+   unallocatedBps: number | null
-+   unallocatedSource: 'envio_same_block_checkpoint' | null
-+   unallocatedCheckpointId: string | null
 +   allocatorAddress: Address | null
 +   sourceEventIds: string[]
 +   strategies: AllocationStateStrategy[]
@@ -659,7 +696,7 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   traceStatus: 'available' | 'unavailable'
 +   immediateVaultCaller: Address | null
 +   authorization: {
-+     role: 'DEBT_MANAGER'
++     roles: string[]
 +     roleMask: string | null
 +     confirmedAtBlock: boolean | null
 +   }
@@ -675,9 +712,28 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   toStateId: string
 +   blockNumber: number
 +   blockTimestamp: number
++   transactionHashes: Hash[]
++   effects: AllocationTransitionEffect[]
++ }
++
++ type AllocationTransitionEffect = {
++   kind: AllocationTransitionKind
 +   transactionHash: Hash
 +   sourceEventIds: string[]
 +   operationIds: string[]
++   actor: ActorClassification
++   transactionTarget: Address | null
++   inputSelector: Hash | null
++   traceStatus: 'available' | 'unavailable'
++   callPath: Address[]
++   immediateVaultCaller: Address | null
++   authorization: {
++     roles: string[]
++     roleMask: string | null
++     confirmedAtBlock: boolean | null
++   }
++   triggerReplays: AllocatorTriggerReplay[]
++   vaultActivities: VaultActivity[]
 + }
 +
 + type AllocationOperation = {
@@ -720,6 +776,7 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   afterStateId: string
 +   transitionIds: string[]
 +   operationIds: string[]
++   changes: AllocationChanges
 +   policyRelationship: AllocationPolicyRelationship | null
 +   execution: AllocationExecution
 +   classification: {
@@ -727,6 +784,29 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +     evidence: string[]
 +     limitations: string[]
 +   }
++ }
++
++ type AllocationChanges = {
++   totalDebtDelta: string | null
++   totalIdleDelta: string | null
++   strategies: Array<{
++     strategyAddress: Address
++     currentDebtBefore: string | null
++     currentDebtAfter: string | null
++     currentDebtDelta: string | null
++     maxDebtBefore: string | null
++     maxDebtAfter: string | null
++     maxDebtDelta: string | null
++     currentDebtBpsBefore: number | null
++     currentDebtBpsAfter: number | null
++     currentDebtBpsDelta: number | null
++     targetDebtRatioBpsBefore: number | null
++     targetDebtRatioBpsAfter: number | null
++     maxDebtRatioBpsBefore: number | null
++     maxDebtRatioBpsAfter: number | null
++     activeBefore: boolean | null
++     activeAfter: boolean | null
++   }>
 + }
 +
 + type AllocationPolicyTarget = {
@@ -772,7 +852,7 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +
 + type AllocationPolicyRelationship = {
 +   policyId: string
-+   relationship: 'applied_in_action' | 'governing_policy' | 'historical_target_match'
++   relationship: 'applied_in_action' | 'governing_policy'
 + }
 +
 + type AllocatorTriggerReplay = {
@@ -780,26 +860,40 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   allocatorAddress: Address
 +   readAtBlock: number
 +   status: 'matched' | 'not_matched' | 'unavailable'
++   shouldUpdate: boolean | null
 +   expectedDebt: string
 +   recommendedDebt: string | null
 +   absoluteDifference: string | null
 +   matchTolerance: string
++   reason: string | null
 + }
 +
 + type VaultActivity = {
 +   kind: 'deposit' | 'withdrawal'
-+   assets: string
-+   shares: string
++   path: 'direct' | 'routed'
++   sender: Address | null
++   receiver: Address | null
++   owner: Address | null
++   assets: string | null
++   shares: string | null
 +   transactionHash: Hash
 +   sourceEventId: string
-+   participants: Address[]
 + }
 +
-+ type AllocationNode =
++ type AllocationBalanceNode =
 +   | { type: 'idle' }
 +   | { type: 'strategy'; address: Address; name: string | null }
++
++ type AllocationBoundaryNode =
 +   | { type: 'external' }
 +   | { type: 'accounting' }
++
++ type AllocationNode = AllocationBalanceNode | AllocationBoundaryNode
++
++ type AllocationChartNode =
++   | { type: 'idle' }
++   | { type: 'strategy'; address: Address }
++   | AllocationBoundaryNode
 +
 + type AllocationFlow = {
 +   source: AllocationNode
@@ -813,9 +907,10 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +     | 'withdrawal'
 +     | 'reported_gain'
 +     | 'reported_loss'
-+     | 'refund'
++     | 'report_refund'
++     | 'bad_debt_purchase'
 +     | 'unattributed_asset_change'
-+   attribution: 'observed_event' | 'derived_from_debt_updates' | 'unattributed'
++   attribution: 'observed_event' | 'derived_from_debt_updates' | 'residual_balance'
 + }
 +
 + type AllocationInterval = {
@@ -829,7 +924,7 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   reconciliation: {
 +     openingTotalAssets: string
 +     closingTotalAssets: string
-+     balanceStatus: 'reconciled' | 'incomplete'
++     balanceStatus: 'reconciled' | 'unreconciled'
 +     attributionStatus: 'complete' | 'partial'
 +     unattributedAmount: string
 +     residuals: AllocationNodeResidual[]
@@ -837,7 +932,7 @@ The original appendix is replaced by a normalized model plus REST projections. T
 + }
 +
 + type AllocationNodeResidual = {
-+   node: AllocationNode
++   node: AllocationBalanceNode
 +   openingBalance: string
 +   attributedInflows: string
 +   attributedOutflows: string
@@ -870,29 +965,31 @@ The original appendix is replaced by a normalized model plus REST projections. T
 + // Denormalized REST projection. Full entry fields may be expanded without
 + // changing the normalized GraphQL model.
 + type VaultAllocationRestResponse = {
-+   schemaVersion: 2
 +   projection: 'full'
 +   generatedAt: number
++   runId: string
 +   direction: 'asc' | 'desc'
-+   dataQuality: AllocationDataQuality
++   dataQuality: AllocationRestDataQuality
 +   vault: VaultAllocationVault
 +   entries: AllocationRestEntry[]
 +   pagination: AllocationPagination
 + }
 +
 + type VaultAllocationChartResponse = {
-+   schemaVersion: 2
 +   projection: 'chart'
 +   generatedAt: number
++   runId: string
 +   direction: 'asc' | 'desc'
-+   dataQuality: AllocationDataQuality
++   dataQuality: AllocationRestDataQuality
 +   vault: Pick<VaultAllocationVault, 'chainId' | 'address' | 'name'>
 +   strategies: Record<Address, string | null>
 +   boundaryStates: Record<string, AllocationChartState>
-+   currentSnapshot: AllocationChartCurrentSnapshot
++   currentSnapshot: AllocationChartCurrentSnapshot | null
 +   entries: AllocationChartEntry[]
 +   pagination: { nextCursor: string | null }
 + }
++
++ type AllocationRestDataQuality = Pick<AllocationDataQuality, 'certification' | 'limitations'>
 +
 + type AllocationRestEntry = AllocationAction & {
 +   before: AllocationState | null
@@ -900,7 +997,6 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   transitions: AllocationTransition[]
 +   operations: AllocationOperation[]
 +   policy: AllocationPolicy | null
-+   detailsAvailable: true
 + }
 +
 + type AllocationChartEntry = {
@@ -912,7 +1008,6 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   execution: Pick<AllocationExecution, 'automation' | 'mechanism' | 'targetStatus'>
 +   expectedAprImpact: ExpectedAprImpact
 +   interval: AllocationChartInterval | null
-+   detailsHref: string
 + }
 +
 + type AllocationChartCurrentSnapshot = AllocationChartState & {
@@ -934,8 +1029,8 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +   toEntryId: string | null
 +   endKind: 'allocation_entry' | 'safe_head'
 +   flows: Array<Omit<AllocationFlow, 'source' | 'target'> & {
-+     source: Omit<AllocationNode, 'name'>
-+     target: Omit<AllocationNode, 'name'>
++     source: AllocationChartNode
++     target: AllocationChartNode
 +   }>
 +   reconciliation: Pick<
 +     AllocationInterval['reconciliation'],
@@ -952,9 +1047,14 @@ The original appendix is replaced by a normalized model plus REST projections. T
 +       proposedAprBps: number
 +       deltaAprBps: number
 +       policyId: string
-+       relationship: AllocationPolicyRelationship['relationship']
++       publishedAt: number
++       relationship: 'applied_in_action' | 'governing_policy'
++       applicationStatus: 'confirmed' | 'inferred_from_historical_config'
 +     }
-+   | { status: 'unavailable'; reason: string }
++   | {
++       status: 'unavailable'
++       reason: 'no_matched_doa_policy' | 'policy_apr_unavailable'
++     }
 +
 + type AllocationPagination = {
 +   limit: number
