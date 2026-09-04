@@ -2,8 +2,10 @@
 
 Reference: [Original Kong allocation history spec](https://hackmd.io/@murderteeth/rJkQlX-AWx)
 
-This document is a short, standalone summary. The complete proposed contract is in
-[kong-allocation-history-spec-proposed.md](./kong-allocation-history-spec-proposed.md).
+This document is a short, standalone summary.
+
+- [Complete proposed Kong specification](https://artifacts.yearn.dev/1y/47756449095454c4cf5b4610e68a54a7.md)
+- [Redline against the original Kong specification](https://artifacts.yearn.dev/1y/0c278aa633caab6586d08c305cf04565.md)
 
 ## Goal
 

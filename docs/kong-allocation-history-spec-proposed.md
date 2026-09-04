@@ -2,6 +2,8 @@
 
 Based on: [Original Kong allocation history spec](https://hackmd.io/@murderteeth/rJkQlX-AWx)
 
+Redline: [Changes from the original Kong specification](https://artifacts.yearn.dev/1y/0c278aa633caab6586d08c305cf04565.md)
+
 This document presents the proposed specification with all changes applied.
 
 ## 1. Goal
