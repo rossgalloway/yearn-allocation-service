@@ -24,11 +24,11 @@ The vaults team confirmed on 2026-09-08 that a Role Manager can assign any addre
 
 Kong consumes normalized events, assignments, deployments, and unresolved records. It owns historical RPC reads, family-specific configuration adapters, current assignment projection, history materialization, and certification. Unsupported custom interfaces retain their assigned address with explicit unavailable configuration.
 
-Local implementation does not activate production coverage. Deployment needs a compatible schema and replay from the required discovery/configuration history on each chain. An empty custom-allocator event stream does not certify its event coverage. This follow-up remains local until publication is explicitly requested.
+Local implementation does not activate production coverage. Deployment needs a compatible schema and replay from the required discovery/configuration history on each chain. An empty custom-allocator event stream does not certify its event coverage. The follow-up is published as [Envio PR #59](https://github.com/yearn/yearn-envio/pull/59), targeting the existing PR #58 branch, `codex/shared-debt-allocator-event-coverage`.
 
 ## Local implementation results (2026-09-08)
 
-The follow-up is implemented on local branch `codex/allocator-discovery-multichain`. Envio codegen, TypeScript build, all 13 allocation tests, and the historical fixture check pass. The fixture check validates three decoded real logs and the previously captured 4,020-log evidence summary; it is not a new full replay.
+The follow-up is published from branch `codex/allocator-discovery-multichain`, commit `25360b3`. Envio codegen, TypeScript build, all 13 allocation tests, and the historical fixture check pass. The fixture check validates three decoded real logs and the previously captured 4,020-log evidence summary; it is not a new full replay.
 
 The aggregate `test` and `check:config` commands cannot complete on the PR #58 base because it references two absent files: `monitoring/test/monitoring.test.js` and `scripts/check_envio_config_compatibility.mjs`. The allocator tests pass before the aggregate test reaches the missing monitoring file. These unrelated script omissions are unchanged.
 
