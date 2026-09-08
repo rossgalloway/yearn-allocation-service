@@ -2,7 +2,7 @@
 
 Based on: [Original Kong allocation history spec](https://hackmd.io/@murderteeth/rJkQlX-AWx)
 
-Redline: [Changes from the original Kong specification](https://artifacts.yearn.dev/1y/0c278aa633caab6586d08c305cf04565.md)
+Redline: [Changes from the original Kong specification](./kong-allocation-history-spec-redline.html)
 
 This document presents the proposed specification with all changes applied.
 
@@ -13,6 +13,10 @@ Provide Kong API consumers with a vault-scoped allocation timeline that explains
 Kong builds one enriched and validated allocation model. GraphQL exposes flexible normalized data and detailed evidence. REST exposes a fast, precomputed chart response for websites. Neither consumer needs to replay events or make archive RPC calls.
 
 Envio owns blockchain indexing. Kong reads indexed data from Envio, performs RPC enrichment, and uses the same materialized data for GraphQL and REST.
+
+The prerequisite current-data milestone is [Kong #471](https://github.com/yearn/kong/issues/471): correct allocator assignment resolution and presentation in existing Kong APIs. It shares its assignment model and configuration adapters with allocation history and can be released independently of the complete timeline.
+
+The vaults team confirmed that a debt allocator may be any address, including when adding an existing vault to a Role Manager. Recognized factory provenance and a supported contract ABI are not prerequisites for preserving the assigned address.
 
 ## 2. Consumers
 
@@ -25,6 +29,8 @@ Envio owns blockchain indexing. Kong reads indexed data from Envio, performs RPC
 For a given `(chainId, vault)`:
 
 - **Vault metadata** — name, symbol, asset, decimals
+- **Allocator identities and deployments** — assigned addresses, supported contract families, discovery evidence, and optional factory provenance
+- **Vault allocator assignments** — initial and replacement assignments in event order, with Role Manager and source-event evidence
 - **Strategy directory** — every strategy seen during the materialized history, plus its status at the latest safe block
 - **Allocation states** — exact snapshots immediately before and after each action, plus the latest safe snapshot
 - **Atomic transitions** — transaction- or event-level changes with source-event references
@@ -86,6 +92,10 @@ Pure withdrawal-driven debt updates are context, not standalone allocation actio
 - Every tracked idle and strategy node in a chart interval must reconcile independently. Unknown balancing changes remain explicit `unattributed_asset_change` flows.
 - Missing values are `null`, not zero. Kong never invents a ratio when its required source evidence is unavailable.
 - GraphQL and REST are projections of the same materialization run and must not classify or reconstruct the same action differently.
+- Factory deployments and active assignments are distinct. `AddedNewVault` establishes an assignment and `UpdateDebtAllocator` replaces it; `NewDebtAllocator` records deployment evidence only.
+- Every assigned address is retained, including custom contracts and addresses without contract code. Unknown provenance, an unsupported interface, absent assignment evidence, explicit clearing, and unavailable RPC enrichment are separate states.
+- Assignment resolution uses `(blockNumber, transactionIndex, logIndex, id)` and the authoritative Role Manager at that position. Later assignments cannot affect earlier actions. Assignment evidence does not by itself prove the executing caller or its permissions.
+- Current allocator APIs and historical materialization use the same assignment resolver. History pins an immutable assignment revision; current lookups can advance independently and disclose their as-of block.
 
 For every idle or strategy node in an interval:
 
@@ -104,12 +114,24 @@ opening balance
 
 ### 7.1 Data sources
 
-- **Envio** — the only blockchain indexer. Kong reads a complete normalized event interface through Envio GraphQL. Each event includes decoded arguments, source contract, vault, block and transaction ordering, transaction hash, and strategy address when relevant. Envio also exposes indexing coverage and known gaps.
+- **Envio** — the only blockchain indexer. Kong reads normalized events, ordered assignments, deployment provenance, and unresolved evidence through Envio GraphQL. Each event includes decoded arguments, source contract, explicit scope, an optional vault, block hash, block and transaction ordering, transaction hash, ABI/normalization evidence, and strategy address when relevant. Envio supplies indexing progress and known gaps; Kong certifies enriched materializations.
 - `Deposit` and `Withdraw` are context events. They help explain debt changes but do not normally create allocation actions by themselves.
 - Envio must normalize legacy and shared-allocator event shapes, including vault-specific allocator assignment and strategy-ratio changes.
 - **DOA policy source** — optional policy targets, APR estimates, explanations, publication time, and immutable source identity. Its availability does not control whether executed history can update.
-- **Archive RPC** — historical snapshot reads at action boundaries, allocator configuration, `shouldUpdateDebt` replay, and transaction traces. Required calls include `vault.totalAssets`, `vault.totalDebt`, `vault.totalIdle`, `vault.strategies(strategy)`, and shared allocator `getStrategyConfig(vault,strategy)`.
+- **Archive RPC** — historical snapshot reads at action boundaries, allocator configuration, `shouldUpdateDebt` replay, and transaction traces. Required accounting calls include `vault.totalAssets`, `vault.totalDebt`, `vault.totalIdle`, and `vault.strategies(strategy)`. Allocator configuration and replay use the verified family's adapter; custom interfaces are explicitly unsupported until an adapter exists.
 - **Current RPC** — latest safe block, current allocation, vault metadata, strategy names, and current strategy status. The archive provider may also serve these reads.
+
+#### Assignment discovery and contract families
+
+Envio discovers addresses from both `AddedNewVault` and `UpdateDebtAllocator`, as well as configured factory deployments. Assignment discovery must not assume a vault-bound ABI. A synthetic `AssignedDebtAllocator` discovery ABI covers the understood legacy singular/plural ratio events, shared vault-scoped ratio events, and common control events. Its aliases distinguish overloaded event shapes. It describes what Envio can decode, not what the contract is.
+
+Registration must cover initial and replacement assignments, persist through restart/replay, and never narrow event capture when later factory evidence identifies a family. Use one compatible discovery registration per address where the Envio runtime requires it; test factory-first and assignment-first orderings. Preserve assignments even when the address has no code or emits no understood events. Custom signatures remain a coverage limitation.
+
+Known vault-bound factories emit `NewDebtAllocator(allocator,vault)`; shared factories emit `NewDebtAllocator(allocator,governance)`. Both have the canonical signature `NewDebtAllocator(address,address)`. Decode using the configured source factory and ABI, and store governance separately from a vault association.
+
+Shared ratio logs use their indexed vault. Shared keeper/governance logs are stored once at allocator scope. Vault-bound logs may use canonical bound-vault evidence even when that allocator is no longer active. Unknown vault association or ambiguous control scope remains unresolved, preserving its original log identity. An assignment alone must not fan an ambiguous event out to every associated vault.
+
+Kong traverses all assignment records, vault-scoped events, allocator-scoped controls, deployments, and unresolved records needed for a vault and its allocator history. Replay must include earlier configuration needed at assignment; discovery at the assignment block alone is not proof of complete earlier history. Reconcile newly resolved evidence without duplicating the source event.
 
 ### 7.2 Storage
 
@@ -120,6 +142,7 @@ type AllocationMaterializationRun = {
   vaultAddress: `0x${string}`
   generatedAt: number
   safeBlock: number
+  assignmentRevision: string
   coverage: AllocationDataQuality
   status: 'running' | 'succeeded' | 'failed'
 }
@@ -130,6 +153,10 @@ Store normalized states, atomic transitions, grouped actions, policies, source e
 REST cursors pin the immutable run, direction, projection, and last keyset position. A refresh cannot change an in-progress traversal.
 
 Kong must persist the normalized model so GraphQL can query it without repeating Envio ingestion or RPC enrichment.
+
+Persist allocator identities by `(chainId,address)` and assignments as a separate one-to-many history per vault. A shared allocator has several vault relationships. Assignment rows retain source event IDs, Role Manager, block hash, and full event position. States reference the selected assignment and support status. Materialization runs pin the evidence revision rather than following a mutable current assignment.
+
+The current allocator projection has its own validated revision and as-of block. Its activation does not depend on traces, DOA availability, chart grouping, or complete historical accounting. Incomplete required assignment coverage must remain visible and must not activate a misleading current answer.
 
 ### 7.3 Refresh jobs
 
@@ -168,6 +195,12 @@ Kong GraphQL reads the normalized active materialization run. It exposes paginat
 GraphQL must allow a client to select a materialization by `runId` and a grouped action by its stable action `id`. This is the drill-down path from a REST chart entry.
 
 GraphQL may be slower and more flexible than REST, but it must not run a separate history reconstruction. Normal GraphQL reads should not repeat Envio ingestion or archive RPC enrichment.
+
+#### Existing allocator APIs: Kong #471
+
+`vault.allocator` and `allocator(chainId,vault).address` must read the same current assignment projection and return the assigned allocator address, never a factory address. Preserve the existing allocator query's vault as lookup context rather than a uniqueness constraint on the allocator entity. Expose assignment revision, as-of block, resolution status, and interface support through additive metadata.
+
+Refresh affected saved vault snapshots, target/max ratios, and dependent caches when a new assignment revision activates. Unsupported custom addresses remain visible with unavailable configuration; never retain the old allocator or its targets as the replacement's state. RPC errors and successful zero ratios remain distinguishable. No new Kong log scanner is introduced for this milestone.
 
 ### 7.6 REST endpoint
 
@@ -212,6 +245,7 @@ The REST endpoint otherwise behaves like existing Kong endpoints:
 Exact Kong paths should follow existing Kong conventions. Keep these responsibilities separate:
 
 - Envio client and complete pagination
+- Shared allocator assignment resolver, evidence persistence, and family-specific configuration adapters
 - RPC state reads, traces, and trigger replay
 - Normalized allocation model and validation
 - Atomic transition construction and multi-transaction action grouping
@@ -223,6 +257,12 @@ Exact Kong paths should follow existing Kong conventions. Keep these responsibil
 - Tests for pure processing, database activation, GraphQL, and REST contracts
 
 Kong's normal job system should invoke the materializer. Deployment details should follow Kong's existing operational model.
+
+### 7.8 Supported chains and delivery
+
+Initial chain coverage is Ethereum (`1`), Base (`8453`), and Katana (`747474`). Each chain has explicit Role Manager/factory discovery sources and start blocks, supported contract evidence, replay progress, and known gaps. Never copy Ethereum deployment metadata or claim replay completion from configuration alone.
+
+Deliver Envio evidence first, then the independently validated Kong #471 current-data milestone, then full allocation-history materialization. Implementation may use pinned fixtures while replay is prepared. Production activation is gated per chain/vault by the relevant verified evidence. Historical GraphQL and REST retain their shared certified run even when the current assignment projection has advanced.
 
 ## 8. Constants
 
@@ -241,6 +281,7 @@ One shared policy processor builds allocation policies and their relationships t
 5. Keep an applied policy active until a newer policy supersedes it. One policy may govern many later keeper actions. A policy relationship is `applied_in_action` when the action applies the configuration and `governing_policy` when a later action executes under that configuration.
 6. Keep unapplied policies `unmatched` or `superseded`. Do not make them stale only because time passed.
 7. Reprocess affected policy relationships when late Envio or DOA data arrives.
+8. Re-evaluate the governing policy at allocator replacement. A prior allocator's configuration does not automatically govern its replacement, even when the proposal or strategy set is unchanged.
 
 Both incremental and full refreshes call this function unchanged.
 
@@ -249,15 +290,16 @@ Both incremental and full refreshes call this function unchanged.
 Per atomic event block and grouped-action boundary:
 
 1. **Candidate strategy universe** — all ever-seen strategies up to and including the block. Sources: `StrategyChanged`, `DebtUpdated`, `DebtPurchased`, `StrategyReported`, `UpdatedMaxDebtForStrategy`, default queue events, allocator ratio events. Do not drop revoked strategies; they may still hold non-zero debt and are needed for reconciliation.
-2. Resolve the allocator from `NewDebtAllocator` and `UpdateDebtAllocator` history, confirmed by historical RPC when available.
+2. Resolve the authoritative Role Manager and latest `AddedNewVault` or `UpdateDebtAllocator` assignment at the requested position. For block-end states, use all assignments through that block; for transaction/effect evidence, respect the full ordered position. Factory events never advance assignment. Explicit removal, clearing, manager change, and missing assignment evidence are represented separately; an old manager's later events must not override the current manager. Historical RPC may corroborate or record a separately labelled observation but never rewrite indexed history.
 3. **Archive reads at `N - 1` and `N`, or before the first and after the last block of a grouped action:**
    - `vault.totalAssets()`
    - `vault.totalDebt()`; validate it against the sum of strategy debt
    - `vault.totalIdle()`; do not silently synthesize a missing value for a published snapshot
    - `vault.strategies(s)` for each candidate strategy
-   - shared allocator `getStrategyConfig(vault,s)` if an allocator exists at the block; decode membership, target ratio, and maximum ratio
+   - supported vault-bound allocator configuration getters with the strategy argument, or shared `getStrategyConfig(vault,s)`; decode membership, target ratio, and maximum ratio according to the verified family
+   - family-specific `shouldUpdateDebt(strategy)` or `shouldUpdateDebt(vault,strategy)` when replay is supported
 4. **Bps from raw integers.** If `totalAssets == 0`, bps are 0; raw debts kept.
-5. **Unavailable-value provenance.** Preserve raw RPC totals and use `null` for any enrichment whose required source evidence is unavailable.
+5. **Unavailable-value provenance.** Preserve raw RPC totals and use `null` with a reason for enrichment whose source evidence is unavailable. Keep the assigned address if the contract family is unsupported or the address has no code. Verify code/family at the requested block. Successful zero ratios remain zero; a failed call never falls back to the previous allocator's configuration.
 6. **Execution evidence.** Read transaction traces, historical role evidence, and allocator `shouldUpdateDebt` results needed for later grouping and classification.
 7. **Validation.** Require strategy-debt sum to equal total debt and total debt plus total idle to equal total assets before publication.
 
@@ -267,22 +309,25 @@ REST exposes this live tail as a separate `currentSnapshot`. GraphQL retains it 
 
 ## 11. Required event sources
 
-Envio must expose these for every Kong-supported chain:
+Envio must expose these for every activated chain/vault in the supported scope:
 
 - **V3 vault:** `Deposit`, `Withdraw`, `DebtUpdated`, `StrategyReported`, `StrategyChanged`, `UpdatedMaxDebtForStrategy`, `DebtPurchased`, `UpdateDefaultQueue`, `UpdateUseDefaultQueue`, `RoleSet`, `RoleStatusChanged`, `UpdateRoleManager`, `UpdateAccountant`
-- **Debt manager factory:** `NewDebtAllocator`
-- **Vault allocator assignment:** `UpdateDebtAllocator` or the equivalent event for the deployed vault version
-- **Debt allocator:** both `UpdateStrategyDebtRatio` and `UpdateStrategyDebtRatios` contract variants, `UpdateKeeper`, `GovernanceTransferred`
-- **Validation entities:** indexing coverage and known-gap metadata sufficient to prove that the required event range is complete
+- **Factory provenance:** both `NewDebtAllocator(allocator,vault)` and `NewDebtAllocator(allocator,governance)`, decoded by source family
+- **Role Manager membership and assignment:** `AddedNewVault`, `UpdateDebtAllocator`, `RemovedVault`, and the deployed vault's `UpdateRoleManager` evidence
+- **Debt allocator:** legacy singular/plural ratio variants, shared `UpdateStrategyDebtRatio(vault,strategy,...)`, `UpdateKeeper`, and `GovernanceTransferred`, including understood events from arbitrary assigned addresses
+- **Discovery and unresolved evidence:** persisted assignment discovery, optional deployments, ABI variants, association reasons, and unresolved records
+- **Indexing evidence:** per-chain source revision, safe indexed range, and known gaps sufficient for Kong to evaluate required coverage; these are not Envio timeline certification
 
-If Envio coverage is partial, indexing and backfilling the missing events upstream is a prerequisite to this work. An Envio event-coverage PR is already in progress; Kong implementation should begin only after its required event set and historical backfill are available.
+If Envio coverage is partial, backfill the missing required events upstream before production activation. [Envio PR #58](https://github.com/yearn/yearn-envio/pull/58) is the starting point; arbitrary-address discovery and Base/Katana coverage extend its original Ethereum scope. Kong implementation and tests may proceed against the agreed interface and pinned fixtures while operational replay is prepared.
 
 Non-production environments may use explicitly marked provisional data for testing. Production Kong must not silently accept incomplete event coverage or failed RPC enrichment.
 
 ## 12. TBDs
 
 - **Envio interface** — GraphQL is the proposed Kong input. Finalize the normalized event, coverage, pagination, authentication, and network contract between Envio and Kong.
-- **Envio coverage** — add the §11 context and shared-allocator events, certify each supported chain, and backfill missing history before production activation.
+- **Envio coverage** — complete §11 on Ethereum, Base, and Katana, verify persisted discovery and cursor traversal, and backfill required history before production activation. Kong owns certification of the enriched timeline.
+- **Custom interfaces** — arbitrary assigned addresses are in scope. The discovery ABI captures understood signatures; additional custom configuration/replay adapters require explicit contract evidence. An unrecognized interface never invalidates an observed assignment.
+- **Assignment authority** — define Role Manager migration/removal handling and coverage boundaries for each deployed version; retain explicit reasons where authority cannot be resolved.
 
 ```typescript
 type AllocationPolicy = {
@@ -321,6 +366,10 @@ Feature is complete when:
 10. GraphQL and REST resolve from the same materialization run and agree on shared state, action, policy, and evidence fields.
 11. Failed or incomplete materialization never replaces the last successful active run.
 12. Production data fails closed when Envio event coverage, archive RPC reads, or accounting validation is incomplete.
+13. Both existing allocator GraphQL fields return the same assigned address at the same assignment revision; saved snapshots/caches agree after activation. The yvUSDC-1 replacement at block `20,987,762` resolves correctly before and after its exact event position.
+14. Initial custom assignments and non-factory replacements remain visible, including code-free addresses. Supported events are captured; unsupported configuration, absent evidence, explicit clearing, and RPC failure stay distinct.
+15. Tests cover both factory semantics, shared allocators serving several vaults, successful zero ratios, same-block replacement ordering, manager migration/removal, late provenance and restart, and equivalent backfill/incremental results.
+16. Ethereum, Base, and Katana have separately verified discovery sources and operational replay evidence before their respective production activation. Configuration and fixtures alone do not certify coverage.
 
 ## Appendix — Type definitions
 
@@ -337,6 +386,10 @@ type VaultAllocationModel = {
   generatedAt: number
   runId: string
   dataQuality: AllocationDataQuality
+  assignmentRevision: string
+  allocators: AllocatorIdentity[]
+  allocatorAssignments: VaultAllocatorAssignment[]
+  unresolvedEvents: UnresolvedAllocationSourceEvent[]
   vault: VaultAllocationVault
   strategies: AllocationHistoryStrategy[]
   states: AllocationState[]
@@ -373,6 +426,52 @@ type AllocationHistoryStrategy = {
   statusReadAtBlock: number
 }
 
+type EventPosition = {
+  blockNumber: number
+  transactionIndex: number
+  logIndex: number
+  id: string
+}
+
+type AllocatorIdentity = {
+  chainId: number
+  address: Address
+  family: 'vault_bound' | 'shared' | 'unknown'
+  support: 'supported' | 'unsupported' | 'no_code' | 'unavailable'
+  observedAtBlock: number
+  discoverySourceEventIds: string[]
+  deployment: {
+    factoryAddress: Address
+    boundVaultAddress: Address | null
+    governanceAddress: Address | null
+    sourceEventId: string
+    abiVariant: string
+  } | null
+}
+
+type VaultAllocatorAssignment = {
+  id: string
+  chainId: number
+  vaultAddress: Address
+  allocatorAddress: Address // Keep the literal zero address if emitted.
+  roleManagerAddress: Address
+  assignmentType: 'initial' | 'updated'
+  position: EventPosition
+  blockHash: Hash
+  sourceEventId: string
+}
+
+type AllocatorResolution = {
+  address: Address | null
+  assignmentId: string | null
+  status: 'assigned' | 'cleared' | 'unavailable'
+  reason: string | null
+  family: AllocatorIdentity['family']
+  support: AllocatorIdentity['support']
+  asOfBlock: number
+  assignmentRevision: string
+}
+
 type AllocationState = {
   id: string
   stateGranularity: 'block_end' | 'action_before' | 'action_after' | 'latest'
@@ -383,6 +482,7 @@ type AllocationState = {
   totalDebt: string
   totalIdle: string | null
   allocatorAddress: Address | null
+  allocatorResolution: AllocatorResolution
   sourceEventIds: string[]
   strategies: AllocationStateStrategy[]
   accountingChecks: {
@@ -702,11 +802,17 @@ type AllocationNodeResidual = {
 type AllocationSourceEvent = {
   id: string
   chainId: number
-  vaultAddress: Address
+  vaultAddress: Address | null
+  scope: 'vault' | 'allocator'
   sourceAddress: Address
-  sourceLabel: 'vault' | 'debtAllocator' | 'debtManagerFactory' | 'unknown'
+  sourceLabel: 'vault' | 'roleManager' | 'debtAllocator' | 'debtManagerFactory' | 'unknown'
   eventName: string
   signature: Hash
+  signatureText: string | null
+  abiVariant: string | null
+  normalizationVersion: number | null
+  associationEvidence: string | null
+  blockHash: Hash
   blockNumber: number
   blockTimestamp: number
   transactionHash: Hash
@@ -717,6 +823,12 @@ type AllocationSourceEvent = {
   inputSelector: Hash | null
   strategyAddress: Address | null
   args: Record<string, unknown>
+}
+
+type UnresolvedAllocationSourceEvent = Omit<AllocationSourceEvent, 'scope' | 'vaultAddress'> & {
+  reason: string
+  resolved: boolean
+  resolvedSourceEventId: string | null
 }
 
 // Denormalized REST projection. Full entry fields may be expanded without

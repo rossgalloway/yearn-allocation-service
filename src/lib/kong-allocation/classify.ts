@@ -1,3 +1,4 @@
+import { resolveAllocatorAssignment } from './allocators'
 import { knownDoaKeeper } from './known-actors'
 import type {
   ActorClassification,
@@ -22,8 +23,8 @@ export interface TransitionPoint {
 }
 
 interface ActorState {
-  allocatorKeepers: Set<Address>
-  governance: Set<Address>
+  allocatorKeepers: Map<Address, Set<Address>>
+  governance: Map<Address, Address>
   roleManager: Address | null
   vaultRoles: Map<Address, bigint>
 }
@@ -43,7 +44,9 @@ const CONFIG_EVENTS = new Set([
   'RoleStatusChanged',
   'UpdateRoleManager',
   'UpdateAccountant',
+  'AddedNewVault',
   'UpdateDebtAllocator',
+  'RemovedVault',
   'NewDebtAllocator',
   'UpdateKeeper',
   'GovernanceTransferred'
@@ -64,13 +67,19 @@ function eventOrder(left: AllocationSourceEvent, right: AllocationSourceEvent): 
   )
 }
 
-function classifyActor(actorAddress: Address | null, state: ActorState, chainId: number): ActorClassification {
+function classifyActor(
+  actorAddress: Address | null,
+  state: ActorState,
+  chainId: number,
+  allocatorAddress: Address | null
+): ActorClassification {
   if (!actorAddress) return { address: null, role: 'unknown', label: null }
   const doaKeeper = knownDoaKeeper(chainId, actorAddress)
   if (doaKeeper) return { address: actorAddress, role: 'doa_keeper', label: doaKeeper.label }
-  if (state.allocatorKeepers.has(actorAddress))
+  if (allocatorAddress && state.allocatorKeepers.get(allocatorAddress)?.has(actorAddress))
     return { address: actorAddress, role: 'debt_allocator_keeper', label: null }
-  if (state.governance.has(actorAddress)) return { address: actorAddress, role: 'governance', label: null }
+  if (allocatorAddress && state.governance.get(allocatorAddress) === actorAddress)
+    return { address: actorAddress, role: 'governance', label: null }
   if (state.roleManager === actorAddress) return { address: actorAddress, role: 'role_manager', label: null }
   if ((state.vaultRoles.get(actorAddress) ?? 0n) !== 0n)
     return { address: actorAddress, role: 'vault_role_holder', label: null }
@@ -81,13 +90,13 @@ function applyActorEvent(event: AllocationSourceEvent, state: ActorState): void 
   if (event.eventName === 'UpdateKeeper') {
     const keeper = address(event.args.keeper)
     if (!keeper) return
-    if (event.args.allowed === true) state.allocatorKeepers.add(keeper)
-    else state.allocatorKeepers.delete(keeper)
+    const keepers = state.allocatorKeepers.get(event.sourceAddress) ?? new Set<Address>()
+    if (event.args.allowed === true) keepers.add(keeper)
+    else keepers.delete(keeper)
+    state.allocatorKeepers.set(event.sourceAddress, keepers)
   } else if (event.eventName === 'GovernanceTransferred') {
-    const previous = address(event.args.previousGovernance)
     const next = address(event.args.newGovernance)
-    if (previous) state.governance.delete(previous)
-    if (next) state.governance.add(next)
+    if (next) state.governance.set(event.sourceAddress, next)
   } else if (event.eventName === 'UpdateRoleManager') {
     state.roleManager = address(event.args.roleManager)
   } else if (event.eventName === 'RoleSet') {
@@ -101,11 +110,12 @@ function applyActorEvent(event: AllocationSourceEvent, state: ActorState): void 
 function actorByTransaction(
   events: readonly AllocationSourceEvent[],
   chainId: number,
+  vaultAddress: Address,
   transactionContexts: ReadonlyMap<Hash, RpcTransactionContext>
 ): Map<Hash, TransactionActorContext> {
   const state: ActorState = {
-    allocatorKeepers: new Set(),
-    governance: new Set(),
+    allocatorKeepers: new Map(),
+    governance: new Map(),
     roleManager: null,
     vaultRoles: new Map()
   }
@@ -120,17 +130,24 @@ function actorByTransaction(
       index += 1
     }
     for (const event of transactionEvents) {
-      if (event.eventName === 'GovernanceTransferred' && state.governance.size === 0) {
+      if (event.eventName === 'GovernanceTransferred' && !state.governance.has(event.sourceAddress)) {
         const previous = address(event.args.previousGovernance)
-        if (previous) state.governance.add(previous)
+        if (previous) state.governance.set(event.sourceAddress, previous)
       }
     }
     const actorAddress = transactionEvents.find((event) => event.transactionFrom)?.transactionFrom ?? null
     const context = transactionContexts.get(transactionHash)
     const immediateVaultCaller = context?.immediateVaultCaller ?? null
+    const assignment = resolveAllocatorAssignment({
+      vaultAddress,
+      events,
+      at: transactionEvents[0],
+      roleManagerAddress: state.roleManager
+    })
+    const activeAllocator = immediateVaultCaller ?? assignment.address
     const roleMask = immediateVaultCaller ? state.vaultRoles.get(immediateVaultCaller) : undefined
     actors.set(transactionHash, {
-      actor: classifyActor(actorAddress, state, chainId),
+      actor: classifyActor(actorAddress, state, chainId, activeAllocator),
       executionContext: {
         traceStatus: context?.traceStatus ?? 'unavailable',
         callPath: context?.callPath ?? [],
@@ -255,7 +272,12 @@ export function buildTransitions(input: {
   transactionContexts?: ReadonlyMap<Hash, RpcTransactionContext>
   triggerReplays?: ReadonlyMap<Hash, AllocatorTriggerReplay[]>
 }): AllocationTransition[] {
-  const actors = actorByTransaction(input.events, input.chainId, input.transactionContexts ?? new Map())
+  const actors = actorByTransaction(
+    input.events,
+    input.chainId,
+    input.vaultAddress,
+    input.transactionContexts ?? new Map()
+  )
   return input.points.map((point) => {
     const isLiveTail = point.currentLiveTail === true
     const blockEvents = input.events.filter((event) => event.blockNumber === point.blockNumber)

@@ -113,6 +113,18 @@ describeDatabase('Postgres allocation history repository', () => {
     const firstRun = await startMaterializationRun({ vault, mode: 'backfill' })
     await completeMaterializationRun({
       run: firstRun,
+      allocatorDeployments: [
+        {
+          allocatorAddress: address,
+          factoryAddress: address,
+          family: 'shared',
+          boundVaultAddress: null,
+          governanceAddress: address,
+          createdBlock: 80,
+          sourceEventId: 'deployment:80',
+          abiVariant: 'shared-v1'
+        }
+      ],
       generatedAt: 1_000,
       safeBlock: { blockNumber: 110, blockTimestamp: 1_100 },
       coverage,
@@ -177,6 +189,13 @@ describeDatabase('Postgres allocation history repository', () => {
       vault: vaultPayload,
       entries: [entry('action:105', 105, 'strategy_reallocation'), entry('current:120', 120, 'current_snapshot')]
     })
+
+    const evidence = await databasePool().query('SELECT allocator_evidence FROM allocation_history_run WHERE id = $1', [
+      firstRun.id
+    ])
+    expect(evidence.rows[0].allocator_evidence.deployments).toMatchObject([
+      { sourceEventId: 'deployment:80', family: 'shared' }
+    ])
 
     const pinnedPage = await readMaterializedAllocationHistory({
       vault,

@@ -85,6 +85,7 @@ function entryState(state: AllocationState, names: ReadonlyMap<Address, string |
     unallocatedSource: state.unallocatedSource,
     unallocatedCheckpointId: state.unallocatedCheckpointId,
     allocatorAddress: state.allocatorAddress,
+    allocatorResolution: state.allocatorResolution,
     allocations: state.strategies.map((strategy) => ({
       strategyAddress: strategy.strategyAddress,
       strategyName: names.get(strategy.strategyAddress) ?? null,
@@ -280,12 +281,15 @@ function executionFingerprint(transition: AllocationTransition): string {
 
 function policyFingerprint(state: AllocationState | null): string {
   if (!state) return ''
-  return state.strategies
-    .map((strategy) =>
-      [strategy.strategyAddress, strategy.targetDebtRatioBps ?? '', strategy.maxDebtRatioBps ?? ''].join(':')
-    )
-    .sort()
-    .join('|')
+  return (
+    `${state.allocatorResolution?.assignmentId ?? state.allocatorAddress ?? ''}|` +
+    state.strategies
+      .map((strategy) =>
+        [strategy.strategyAddress, strategy.targetDebtRatioBps ?? '', strategy.maxDebtRatioBps ?? ''].join(':')
+      )
+      .sort()
+      .join('|')
+  )
 }
 
 function allTriggersMatched(transition: AllocationTransition): boolean {

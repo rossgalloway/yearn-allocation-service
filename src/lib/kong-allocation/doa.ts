@@ -168,6 +168,14 @@ export function processDoa(
   for (const transition of updated) {
     const active = [...appliedPolicies].reverse().find((policy) => policy.blockNumber <= transition.blockNumber)
     if (!active || transition.doa) continue
+    // An old allocator policy cannot govern executions after reassignment or manager changes.
+    const authorityChanged = events.some(
+      (event) =>
+        ['AddedNewVault', 'UpdateDebtAllocator', 'RemovedVault', 'UpdateRoleManager'].includes(event.eventName) &&
+        event.blockNumber >= active.blockNumber &&
+        event.blockNumber <= transition.blockNumber
+    )
+    if (authorityChanged) continue
     const debtEffects = transition.effects.filter((effect) =>
       effect.sourceEventIds.some((id) => eventsById.get(id)?.eventName === 'DebtUpdated')
     )

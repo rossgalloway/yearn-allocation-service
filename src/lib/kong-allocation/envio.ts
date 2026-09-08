@@ -1,11 +1,14 @@
 import { AllocationReplayLimitError, envioGraphqlRequest } from '@/lib/envio/client'
-import type { Address, AllocationSourceEvent, Hash } from './types'
+import type { Address, AllocationSourceEvent, AllocatorDeploymentEvidence, Hash } from './types'
 
 const EVENT_PAGE_SIZE = 1000
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/
 const HASH_PATTERN = /^0x[a-fA-F0-9]{64}$/
 const NORMALIZED_SUPPLEMENT_EVENT_NAMES = [
+  'AddedNewVault',
   'UpdateDebtAllocator',
+  'RemovedVault',
+  'UpdateRoleManager',
   'UpdateStrategyDebtRatio',
   'UpdateStrategyDebtRatios',
   'UpdateKeeper',
@@ -44,10 +47,6 @@ function decimal(value: unknown): string | null {
 
 function address(value: unknown): Address | null {
   return typeof value === 'string' && ADDRESS_PATTERN.test(value) ? (value.toLowerCase() as Address) : null
-}
-
-function queryAddress(value: unknown): string | null {
-  return typeof value === 'string' && ADDRESS_PATTERN.test(value) ? value : null
 }
 
 function addresses(value: unknown): Address[] {
@@ -212,63 +211,6 @@ export function isAllocationTransitionEvent(event: AllocationSourceEvent): boole
   return !CONTEXT_ONLY_EVENT_NAMES.has(event.eventName)
 }
 
-const FACTORY_EVENT: EventDefinition = {
-  table: 'NewDebtAllocator',
-  eventName: 'NewDebtAllocator',
-  signature: '0xb87aa110ff22ca00092bbab091c1b6464f413dcfe6391c7fcfc0454f8e1989cb',
-  fields: 'vault allocator factoryAddress',
-  sourceLabel: 'debtManagerFactory',
-  sourceAddressField: 'factoryAddress',
-  args: (row) => ({ allocator: address(row.allocator), vault: address(row.vault) })
-}
-
-const ALLOCATOR_EVENTS: EventDefinition[] = [
-  {
-    table: 'UpdateStrategyDebtRatios',
-    eventName: 'UpdateStrategyDebtRatios',
-    signature: '0x7f2bbad10e91f21c5aaf78550279b42e2863496b6c7e73b661ec891b730c33fb',
-    fields: 'allocatorAddress strategy newTargetRatio newMaxRatio newTotalDebtRatio',
-    sourceLabel: 'debtAllocator',
-    sourceAddressField: 'allocatorAddress',
-    strategyField: 'strategy',
-    args: (row) => ({
-      strategy: address(row.strategy),
-      newTargetRatio: decimal(row.newTargetRatio),
-      newMaxRatio: decimal(row.newMaxRatio),
-      newTotalDebtRatio: decimal(row.newTotalDebtRatio)
-    })
-  },
-  {
-    table: 'UpdateKeeper',
-    eventName: 'UpdateKeeper',
-    signature: '0x465c356447ab4144076254f033e216e3ba04a16610457682ed579a7fdaebd776',
-    fields: 'allocatorAddress keeper allowed',
-    sourceLabel: 'debtAllocator',
-    sourceAddressField: 'allocatorAddress',
-    args: (row) => ({ keeper: address(row.keeper), allowed: row.allowed === true })
-  },
-  {
-    table: 'GovernanceTransferred',
-    eventName: 'GovernanceTransferred',
-    signature: '0x5f56bee8cffbe9a78652a74a60705edede02af10b0bbb888ca44b79a0d42ce80',
-    fields: 'allocatorAddress previousGovernance newGovernance',
-    sourceLabel: 'debtAllocator',
-    sourceAddressField: 'allocatorAddress',
-    args: (row) => ({
-      previousGovernance: address(row.previousGovernance),
-      newGovernance: address(row.newGovernance)
-    })
-  }
-]
-
-function eventSelection(alias: string, definition: EventDefinition, where: string): string {
-  return `${alias}: ${definition.table}(
-    where: { ${where} blockNumber: { _lte: $toBlock } }
-    order_by: [{ blockNumber: desc }, { transactionIndex: desc }, { logIndex: desc }, { id: desc }]
-    limit: $pageSize
-  ) { ${commonFields} ${definition.fields} }`
-}
-
 function safeInteger(value: unknown, field: string): number {
   const parsed = typeof value === 'number' ? value : Number(value)
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`Envio returned an invalid ${field}`)
@@ -290,6 +232,9 @@ function sourceEvent(definition: EventDefinition, row: Record<string, unknown>):
   return {
     id: `${safeInteger(row.chainId, 'chain ID')}:${transactionHash}:${logIndex}`,
     sourceAddress,
+    chainId: safeInteger(row.chainId, 'chain ID'),
+    vaultAddress: address(row.vaultAddress),
+    blockHash: hash(row.blockHash, 'block hash'),
     sourceLabel: definition.sourceLabel,
     eventName: definition.eventName,
     signature: definition.signature,
@@ -322,14 +267,25 @@ function normalizedSourceEvent(row: Record<string, unknown>): AllocationSourceEv
     throw new Error(`Envio returned invalid normalized args for ${eventName}`)
   }
   const sourceType = typeof row.sourceType === 'string' ? row.sourceType.toLowerCase() : ''
-  const sourceLabel: AllocationSourceEvent['sourceLabel'] = sourceType.includes('allocator')
-    ? 'debtAllocator'
-    : sourceType.includes('vault')
-      ? 'vault'
-      : 'unknown'
+  const sourceLabel: AllocationSourceEvent['sourceLabel'] = sourceType.includes('factory')
+    ? 'debtManagerFactory'
+    : sourceType === 'rolemanager'
+      ? 'roleManager'
+      : sourceType.includes('allocator')
+        ? 'debtAllocator'
+        : sourceType === 'vault'
+          ? 'vault'
+          : 'unknown'
   return {
     id: `${safeInteger(row.chainId, 'chain ID')}:${transactionHash}:${logIndex}`,
     sourceAddress,
+    chainId: safeInteger(row.chainId, 'chain ID'),
+    vaultAddress: address(row.vaultAddress),
+    scope: row.scope === 'allocator' ? 'allocator' : 'vault',
+    abiVariant: String(row.abiVariant),
+    associationEvidence: String(row.associationEvidence),
+    normalizationVersion: safeInteger(row.normalizationVersion, 'normalization version'),
+    blockHash: hash(row.blockHash, 'block hash'),
     sourceLabel,
     eventName,
     signature: hash(row.signature, 'event signature'),
@@ -347,12 +303,6 @@ function normalizedSourceEvent(row: Record<string, unknown>): AllocationSourceEv
     strategyAddress: address(row.strategyAddress),
     args
   }
-}
-
-function rows(data: Record<string, unknown>, alias: string): Record<string, unknown>[] {
-  const value = data[alias]
-  if (!Array.isArray(value)) throw new Error(`Envio response omitted ${alias}`)
-  return value as Record<string, unknown>[]
 }
 
 function rawEventCursor(row: Record<string, unknown>): EventCursor {
@@ -455,75 +405,112 @@ async function fetchDefinitionRows(input: {
   return collected
 }
 
-async function fetchNormalizedSupplementRows(input: {
+const normalizedFields = `
+  id chainId sourceAddress sourceType eventName signature blockNumber blockTimestamp blockHash
+  transactionHash transactionIndex logIndex topLevelTransactionFrom topLevelTransactionTo
+  topLevelInputSelector strategyAddress argsJson normalizationVersion abiVariant
+`
+
+async function fetchEvidenceRows(input: {
+  table: string
+  fields: string
   chainId: number
-  vaultAddress: Address
-  fromBlock: number
   toBlock: number
   maxEvents: number
-}): Promise<{ available: boolean; rows: Record<string, unknown>[] }> {
+  filter: string
+  variables: Record<string, unknown>
+  variableDefinitions: string
+}): Promise<Record<string, unknown>[]> {
   const collected: Record<string, unknown>[] = []
   let cursor: EventCursor | undefined
-  try {
+  while (true) {
+    const data = await envioGraphqlRequest<{ items: Record<string, unknown>[] }>(
+      `query KongAllocationEvidencePage($chainId: Int! $toBlock: Int! $pageSize: Int!
+        ${input.variableDefinitions} ${cursorVariables(cursor)}) {
+        items: ${input.table}(where: {
+          chainId: { _eq: $chainId } blockNumber: { _lte: $toBlock }
+          ${input.filter} ${cursorClause(cursor)}
+        } order_by: [{blockNumber: asc}, {transactionIndex: asc}, {logIndex: asc}, {id: asc}]
+          limit: $pageSize) { ${input.fields} }
+      }`,
+      {
+        chainId: input.chainId,
+        toBlock: input.toBlock,
+        pageSize: EVENT_PAGE_SIZE,
+        ...input.variables,
+        ...cursorValues(cursor)
+      }
+    )
+    if (!Array.isArray(data.items)) throw new Error(`Envio response omitted ${input.table}`)
+    collected.push(...data.items)
+    if (collected.length > input.maxEvents) throw new AllocationReplayLimitError(input.maxEvents)
+    if (data.items.length < EVENT_PAGE_SIZE) return collected
+    const next = rawEventCursor(data.items[data.items.length - 1])
+    if (cursor && JSON.stringify(next) === JSON.stringify(cursor))
+      throw new Error('Envio evidence pagination did not advance')
+    cursor = next
+  }
+}
+
+async function fetchDeployments(input: {
+  chainId: number
+  toBlock: number
+  maxEvents: number
+  allocatorAddresses: Address[]
+}): Promise<AllocatorDeploymentEvidence[]> {
+  if (!input.allocatorAddresses.length) return []
+  const deployments: AllocatorDeploymentEvidence[] = []
+  for (const family of ['vault_bound', 'shared'] as const) {
+    const table = family === 'shared' ? 'SharedDebtAllocatorDeployment' : 'DebtAllocatorDeployment'
+    let afterId = ''
     while (true) {
-      const data = await envioGraphqlRequest<{ AllocationSourceEvent: Record<string, unknown>[] }>(
-        `query KongAllocationNormalizedPage(
-          $chainId: Int!
-          $vaultAddress: String!
-          $fromBlock: Int!
-          $toBlock: Int!
-          $eventNames: [String!]!
-          $pageSize: Int!
-          ${cursorVariables(cursor)}
-        ) {
-          AllocationSourceEvent(
-            where: {
-              chainId: { _eq: $chainId }
-              vaultAddress: { _eq: $vaultAddress }
-              blockNumber: { _gte: $fromBlock, _lte: $toBlock }
-              eventName: { _in: $eventNames }
-              ${cursorClause(cursor)}
-            }
-            order_by: [{ blockNumber: asc }, { transactionIndex: asc }, { logIndex: asc }, { id: asc }]
-            limit: $pageSize
-          ) {
-            id chainId sourceAddress sourceType eventName signature blockNumber blockTimestamp
-            transactionHash transactionIndex logIndex topLevelTransactionFrom topLevelTransactionTo
-            topLevelInputSelector strategyAddress argsJson
+      const data = await envioGraphqlRequest<{ items: Record<string, unknown>[] }>(
+        `query KongAllocatorDeployments($chainId: Int! $toBlock: Int! $addresses: [String!]! $afterId: String! $pageSize: Int!) {
+          items: ${table}(where: { chainId: {_eq: $chainId}, allocatorAddress: {_in: $addresses},
+            createdBlock: {_lte: $toBlock}, id: {_gt: $afterId} } order_by: {id: asc} limit: $pageSize) {
+            id allocatorAddress factoryAddress abiVariant createdBlock createdEventId
+            ${family === 'shared' ? 'governanceAddress' : 'vaultAddress'}
           }
         }`,
         {
           chainId: input.chainId,
-          vaultAddress: input.vaultAddress.toLowerCase(),
-          fromBlock: input.fromBlock,
           toBlock: input.toBlock,
-          eventNames: NORMALIZED_SUPPLEMENT_EVENT_NAMES,
-          pageSize: EVENT_PAGE_SIZE,
-          ...cursorValues(cursor)
+          addresses: input.allocatorAddresses,
+          afterId,
+          pageSize: EVENT_PAGE_SIZE
         }
       )
-      const page = data.AllocationSourceEvent
-      if (!Array.isArray(page)) throw new Error('Envio response omitted AllocationSourceEvent')
-      collected.push(...page)
-      if (collected.length > input.maxEvents) throw new AllocationReplayLimitError(input.maxEvents)
-      if (page.length < EVENT_PAGE_SIZE) break
-      const last = page.at(-1)
-      if (!last) break
-      const next = rawEventCursor(last)
-      if (cursor && JSON.stringify(next) === JSON.stringify(cursor)) {
-        throw new Error('Envio normalized event pagination did not advance')
+      if (!Array.isArray(data.items)) throw new Error(`Envio response omitted ${table}`)
+      for (const row of data.items) {
+        const allocatorAddress = address(row.allocatorAddress)
+        const factoryAddress = address(row.factoryAddress)
+        if (!allocatorAddress || !factoryAddress || typeof row.createdEventId !== 'string')
+          throw new Error('Invalid allocator deployment evidence')
+        deployments.push({
+          allocatorAddress,
+          factoryAddress,
+          family,
+          boundVaultAddress: address(row.vaultAddress),
+          governanceAddress: address(row.governanceAddress),
+          createdBlock: safeInteger(row.createdBlock, 'creation block'),
+          sourceEventId: row.createdEventId,
+          abiVariant: String(row.abiVariant)
+        })
       }
-      cursor = next
+      if (deployments.length > input.maxEvents) throw new AllocationReplayLimitError(input.maxEvents)
+      if (data.items.length < EVENT_PAGE_SIZE) break
+      const next = data.items.at(-1)?.id
+      if (typeof next !== 'string' || next <= afterId) throw new Error('Envio deployment pagination did not advance')
+      afterId = next
     }
-    return { available: true, rows: collected }
-  } catch (error) {
-    if (error instanceof AllocationReplayLimitError) throw error
-    return { available: false, rows: [] }
   }
+  return deployments
 }
 
 export interface EnvioEventBatch {
   events: AllocationSourceEvent[]
+  deployments: AllocatorDeploymentEvidence[]
+  unresolvedEventIds: string[]
   truncatedEventFamilies: string[]
   normalizedSupplementAvailable: boolean
 }
@@ -535,86 +522,81 @@ export async function fetchCompleteKongAllocationEvents(input: {
   toBlock: number
   maxEvents: number
 }): Promise<EnvioEventBatch> {
-  const normalized = await fetchNormalizedSupplementRows(input)
-  const normalizedEvents = normalized.rows.map((row) => normalizedSourceEvent(row))
+  let normalizedSupplementAvailable = true
+  let normalizedEvents: AllocationSourceEvent[] = []
+  let deployments: AllocatorDeploymentEvidence[] = []
+  let unresolvedEventIds: string[] = []
+  try {
+    // Assignment and policy history must start before the requested accounting range.
+    const vaultRows = await fetchEvidenceRows({
+      ...input,
+      table: 'AllocationSourceEvent',
+      fields: `${normalizedFields} vaultAddress scope associationEvidence`,
+      filter: 'vaultAddress: {_eq: $vaultAddress} scope: {_eq: "vault"} eventName: {_in: $eventNames}',
+      variableDefinitions: '$vaultAddress: String! $eventNames: [String!]!',
+      variables: { vaultAddress: input.vaultAddress.toLowerCase(), eventNames: NORMALIZED_SUPPLEMENT_EVENT_NAMES }
+    })
+    normalizedEvents = vaultRows.map(normalizedSourceEvent)
+    const allocatorAddresses = [
+      ...new Set(
+        normalizedEvents
+          .filter((event) => ['AddedNewVault', 'UpdateDebtAllocator'].includes(event.eventName))
+          .map((event) => address(event.args.debtAllocator))
+          .filter((value): value is Address => value !== null && !/^0x0{40}$/.test(value))
+      )
+    ]
+    deployments = await fetchDeployments({ ...input, allocatorAddresses })
+    if (allocatorAddresses.length) {
+      const sharedRows = await fetchEvidenceRows({
+        ...input,
+        table: 'AllocationSourceEvent',
+        fields: `${normalizedFields} vaultAddress scope associationEvidence`,
+        filter: 'sourceAddress: {_in: $addresses} scope: {_eq: "allocator"}',
+        variableDefinitions: '$addresses: [String!]!',
+        variables: { addresses: allocatorAddresses }
+      })
+      normalizedEvents.push(...sharedRows.map(normalizedSourceEvent))
+      const unresolved = await fetchEvidenceRows({
+        ...input,
+        table: 'UnresolvedAllocationSourceEvent',
+        fields: 'id blockNumber transactionIndex logIndex',
+        filter: 'sourceAddress: {_in: $addresses} resolved: {_eq: false}',
+        variableDefinitions: '$addresses: [String!]!',
+        variables: { addresses: allocatorAddresses }
+      })
+      unresolvedEventIds = unresolved.map((row) => String(row.id))
+    }
+  } catch (error) {
+    if (error instanceof AllocationReplayLimitError) throw error
+    normalizedSupplementAvailable = false
+  }
   const vaultRows = await Promise.all(
     VAULT_EVENTS.map(async (definition) => ({
       definition,
       rows: await fetchDefinitionRows({
         definition,
-        chainId: input.chainId,
-        fromBlock: input.fromBlock,
-        toBlock: input.toBlock,
+        ...input,
         where: 'chainId: { _eq: $chainId } vaultAddress: { _eq: $vaultAddress }',
         variables: { vaultAddress: input.vaultAddress },
-        variableDefinitions: '$vaultAddress: String!',
-        maxEvents: input.maxEvents
+        variableDefinitions: '$vaultAddress: String!'
       })
     }))
   )
-  const factoryRows = await fetchDefinitionRows({
-    definition: FACTORY_EVENT,
-    chainId: input.chainId,
-    fromBlock: input.fromBlock,
-    toBlock: input.toBlock,
-    where: 'chainId: { _eq: $chainId } vault: { _eq: $vaultAddress }',
-    variables: { vaultAddress: input.vaultAddress },
-    variableDefinitions: '$vaultAddress: String!',
-    maxEvents: input.maxEvents
-  })
-  const allocatorAddresses = [
-    ...new Set(
-      [
-        ...factoryRows.map((row) => queryAddress(row.allocator)),
-        ...normalizedEvents
-          .filter((event) => event.eventName === 'UpdateDebtAllocator')
-          .map((event) => queryAddress(event.args.debtAllocator))
-      ].filter((item): item is string => item !== null)
-    )
-  ]
-  const allocatorRows =
-    allocatorAddresses.length === 0
-      ? []
-      : await Promise.all(
-          ALLOCATOR_EVENTS.map(async (definition) => ({
-            definition,
-            rows: await fetchDefinitionRows({
-              definition,
-              chainId: input.chainId,
-              fromBlock: input.fromBlock,
-              toBlock: input.toBlock,
-              where: 'chainId: { _eq: $chainId } allocatorAddress: { _in: $allocatorAddresses }',
-              variables: { allocatorAddresses },
-              variableDefinitions: '$allocatorAddresses: [String!]!',
-              maxEvents: input.maxEvents
-            })
-          }))
-        )
-
-  const events = [
-    ...vaultRows.flatMap(({ definition, rows: eventRows }) => eventRows.map((row) => sourceEvent(definition, row))),
-    ...factoryRows.map((row) => sourceEvent(FACTORY_EVENT, row)),
-    ...allocatorRows.flatMap(({ definition, rows: eventRows }) => eventRows.map((row) => sourceEvent(definition, row)))
-  ]
-  const eventsById = new Map(events.map((event) => [event.id, event]))
-  for (const event of normalizedEvents) {
-    eventsById.set(event.id, event)
-  }
-  if (eventsById.size > input.maxEvents) {
-    throw new Error(`Kong allocation history exceeds the configured limit of ${input.maxEvents} events`)
-  }
-  const uniqueEvents = [...eventsById.values()].sort(
+  const eventsById = new Map(
+    vaultRows
+      .flatMap(({ definition, rows }) => rows.map((row) => sourceEvent(definition, row)))
+      .map((event) => [event.id, event])
+  )
+  for (const event of normalizedEvents) eventsById.set(event.id, event)
+  if (eventsById.size > input.maxEvents) throw new AllocationReplayLimitError(input.maxEvents)
+  const events = [...eventsById.values()].sort(
     (left, right) =>
       left.blockNumber - right.blockNumber ||
       left.transactionIndex - right.transactionIndex ||
       left.logIndex - right.logIndex ||
       left.id.localeCompare(right.id)
   )
-  return {
-    events: uniqueEvents,
-    truncatedEventFamilies: [],
-    normalizedSupplementAvailable: normalized.available
-  }
+  return { events, deployments, unresolvedEventIds, truncatedEventFamilies: [], normalizedSupplementAvailable }
 }
 
 export async function fetchKongAllocationEvents(input: {
@@ -622,110 +604,5 @@ export async function fetchKongAllocationEvents(input: {
   vaultAddress: Address
   toBlock: number
 }): Promise<EnvioEventBatch> {
-  let normalizedSupplementAvailable = true
-  let normalizedRows: Record<string, unknown>[] = []
-  try {
-    const normalizedData = await envioGraphqlRequest<{ AllocationSourceEvent: Record<string, unknown>[] }>(
-      `query KongAllocationNormalizedSupplement(
-        $chainId: Int!
-        $vaultAddress: String!
-        $toBlock: Int!
-        $eventNames: [String!]!
-        $pageSize: Int!
-      ) {
-        AllocationSourceEvent(
-          where: {
-            chainId: { _eq: $chainId }
-            vaultAddress: { _eq: $vaultAddress }
-            blockNumber: { _lte: $toBlock }
-            eventName: { _in: $eventNames }
-          }
-          order_by: [{ blockNumber: desc }, { transactionIndex: desc }, { logIndex: desc }, { id: desc }]
-          limit: $pageSize
-        ) {
-          chainId sourceAddress sourceType eventName signature blockNumber blockTimestamp
-          transactionHash transactionIndex logIndex topLevelTransactionFrom topLevelTransactionTo
-          topLevelInputSelector strategyAddress argsJson
-        }
-      }`,
-      {
-        chainId: input.chainId,
-        vaultAddress: input.vaultAddress.toLowerCase(),
-        toBlock: input.toBlock,
-        eventNames: NORMALIZED_SUPPLEMENT_EVENT_NAMES,
-        pageSize: EVENT_PAGE_SIZE
-      }
-    )
-    normalizedRows = normalizedData.AllocationSourceEvent
-  } catch {
-    normalizedSupplementAvailable = false
-  }
-  const vaultSelections = VAULT_EVENTS.map((definition, index) =>
-    eventSelection(`v${index}`, definition, 'chainId: { _eq: $chainId } vaultAddress: { _eq: $vaultAddress }')
-  )
-  vaultSelections.push(
-    eventSelection('factory', FACTORY_EVENT, 'chainId: { _eq: $chainId } vault: { _eq: $vaultAddress }')
-  )
-  const vaultData = await envioGraphqlRequest<Record<string, unknown>>(
-    `query KongAllocationVaultEvents($chainId: Int!, $vaultAddress: String!, $toBlock: Int!, $pageSize: Int!) {
-      ${vaultSelections.join('\n')}
-    }`,
-    { chainId: input.chainId, vaultAddress: input.vaultAddress, toBlock: input.toBlock, pageSize: EVENT_PAGE_SIZE }
-  )
-
-  const legacyEvents = VAULT_EVENTS.flatMap((definition, index) =>
-    rows(vaultData, `v${index}`).map((row) => sourceEvent(definition, row))
-  )
-  const eventsById = new Map(legacyEvents.map((event) => [event.id, event]))
-  for (const row of normalizedRows) {
-    const event = normalizedSourceEvent(row)
-    eventsById.set(event.id, event)
-  }
-  const events = [...eventsById.values()]
-  const factoryRows = rows(vaultData, 'factory')
-  events.push(...factoryRows.map((row) => sourceEvent(FACTORY_EVENT, row)))
-
-  const allocatorAddresses = [
-    ...new Set(factoryRows.map((row) => queryAddress(row.allocator)).filter((item): item is string => item !== null))
-  ]
-  const truncatedEventFamilies = VAULT_EVENTS.filter(
-    (_, index) => rows(vaultData, `v${index}`).length === EVENT_PAGE_SIZE
-  ).map((definition) => definition.eventName)
-  if (normalizedRows.length === EVENT_PAGE_SIZE) {
-    truncatedEventFamilies.push('AllocationSourceEvent:supplement')
-  }
-
-  if (allocatorAddresses.length > 0) {
-    const allocatorSelections = ALLOCATOR_EVENTS.map((definition, index) =>
-      eventSelection(
-        `a${index}`,
-        definition,
-        'chainId: { _eq: $chainId } allocatorAddress: { _in: $allocatorAddresses }'
-      )
-    )
-    const allocatorData = await envioGraphqlRequest<Record<string, unknown>>(
-      `query KongAllocationAllocatorEvents(
-        $chainId: Int!
-        $allocatorAddresses: [String!]!
-        $toBlock: Int!
-        $pageSize: Int!
-      ) { ${allocatorSelections.join('\n')} }`,
-      { chainId: input.chainId, allocatorAddresses, toBlock: input.toBlock, pageSize: EVENT_PAGE_SIZE }
-    )
-    for (const [index, definition] of ALLOCATOR_EVENTS.entries()) {
-      const eventRows = rows(allocatorData, `a${index}`)
-      events.push(...eventRows.map((row) => sourceEvent(definition, row)))
-      if (eventRows.length === EVENT_PAGE_SIZE) truncatedEventFamilies.push(definition.eventName)
-    }
-  }
-
-  const uniqueEvents = [...new Map(events.map((event) => [event.id, event])).values()]
-  uniqueEvents.sort(
-    (left, right) =>
-      left.blockNumber - right.blockNumber ||
-      left.transactionIndex - right.transactionIndex ||
-      left.logIndex - right.logIndex ||
-      left.id.localeCompare(right.id)
-  )
-  return { events: uniqueEvents, truncatedEventFamilies, normalizedSupplementAvailable }
+  return fetchCompleteKongAllocationEvents({ ...input, fromBlock: 0, maxEvents: 250_000 })
 }

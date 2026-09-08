@@ -1,4 +1,11 @@
-import type { Address, AllocatorTriggerReplay, Hash, RpcTransactionContext, VaultAllocationVault } from './types'
+import type {
+  Address,
+  AllocatorFamily,
+  AllocatorTriggerReplay,
+  Hash,
+  RpcTransactionContext,
+  VaultAllocationVault
+} from './types'
 
 const REQUEST_TIMEOUT_MS = 30_000
 const RPC_BATCH_SIZE = 100
@@ -14,9 +21,10 @@ const SELECTOR = {
   totalIdle: '0x9aa7df94',
   strategies: '0x39ebf823',
   roleManager: '0x79b98917',
-  debtAllocator: '0x64724604',
   strategyConfig: '0x0dedca24',
-  shouldUpdateDebt: '0x4ad0f1d0'
+  vaultBoundConfig: '0xe48a5f7b',
+  shouldUpdateDebt: '0x4ad0f1d0',
+  vaultBoundShouldUpdateDebt: '0x05e4ae83'
 } as const
 
 interface RpcRequest {
@@ -190,6 +198,29 @@ export function encodeAddressPairCall(selector: Hash, first: Address, second: Ad
     .padStart(64, '0')}` as Hash
 }
 
+export function allocatorConfigurationCall(family: AllocatorFamily, vault: Address, strategy: Address): Hash | null {
+  if (family === 'shared') return encodeAddressPairCall(SELECTOR.strategyConfig, vault, strategy)
+  if (family === 'vault_bound') return encodeAddressCall(SELECTOR.vaultBoundConfig, strategy)
+  return null
+}
+
+export async function readAllocatorCode(
+  chainId: number,
+  inputs: readonly { address: Address; blockNumber: number }[]
+): Promise<Map<string, 'code' | 'no_code' | 'unavailable'>> {
+  const unique = [...new Map(inputs.map((input) => [`${input.blockNumber}:${input.address}`, input])).entries()]
+  const responses = await batchedRequests(
+    chainId,
+    unique.map(([, input]) => ({ method: 'eth_getCode', params: [input.address, blockTag(input.blockNumber)] }))
+  )
+  return new Map(
+    unique.map(([key], index) => {
+      const code = hexData(responses[index]?.result)
+      return [key, code === null ? 'unavailable' : code === '0x' ? 'no_code' : 'code']
+    })
+  )
+}
+
 export async function readContractCalls(
   chainId: number,
   calls: readonly ContractCall[]
@@ -345,10 +376,18 @@ function dynamicBytes(data: Hash | null, offsetWord: number): Hash | null {
   return body.length >= valueEnd ? (`0x${body.slice(valueStart, valueEnd)}` as Hash) : null
 }
 
-function triggerTarget(calldata: Hash | null): bigint | null {
-  if (!calldata || calldata.length < 2 + 8 + 64 * 3) return null
-  const targetStart = 2 + 8 + 64 * 2
-  return BigInt(`0x${calldata.slice(targetStart, targetStart + 64)}`)
+export function triggerTarget(
+  calldata: Hash | null,
+  input: Pick<AllocatorTriggerReplayInput, 'family' | 'vaultAddress' | 'strategyAddress'>
+): bigint | null {
+  if (!calldata || input.family === 'unknown') return null
+  const shared = input.family === 'shared'
+  const selector = shared ? '0xda5f3286' : '0x0aeebf55'
+  const prefix = shared
+    ? encodeAddressPairCall(selector, input.vaultAddress, input.strategyAddress)
+    : encodeAddressCall(selector, input.strategyAddress)
+  if (!calldata.toLowerCase().startsWith(prefix) || calldata.length !== prefix.length + 64) return null
+  return BigInt(`0x${calldata.slice(prefix.length)}`)
 }
 
 function bytesText(value: Hash | null): string | null {
@@ -361,6 +400,7 @@ function bytesText(value: Hash | null): string | null {
 }
 
 export interface AllocatorTriggerReplayInput {
+  family: AllocatorFamily
   transactionHash: Hash
   allocatorAddress: Address
   vaultAddress: Address
@@ -374,13 +414,20 @@ export async function readAllocatorTriggerReplays(
   chainId: number,
   inputs: readonly AllocatorTriggerReplayInput[]
 ): Promise<Map<Hash, AllocatorTriggerReplay[]>> {
-  const calls = inputs.map(
-    (input, index): ContractCall => ({
-      key: String(index),
-      address: input.allocatorAddress,
-      data: encodeAddressPairCall(contractSelectors.shouldUpdateDebt, input.vaultAddress, input.strategyAddress),
-      blockNumber: Math.max(0, input.blockNumber - 1)
-    })
+  const calls = inputs.flatMap((input, index): ContractCall[] =>
+    input.family === 'unknown'
+      ? []
+      : [
+          {
+            key: String(index),
+            address: input.allocatorAddress,
+            data:
+              input.family === 'shared'
+                ? encodeAddressPairCall(contractSelectors.shouldUpdateDebt, input.vaultAddress, input.strategyAddress)
+                : encodeAddressCall(contractSelectors.vaultBoundShouldUpdateDebt, input.strategyAddress),
+            blockNumber: Math.max(0, input.blockNumber - 1)
+          }
+        ]
   )
   const results = await readContractCalls(chainId, calls)
   const byTransaction = new Map<Hash, AllocatorTriggerReplay[]>()
@@ -389,7 +436,7 @@ export async function readAllocatorTriggerReplays(
     const shouldUpdateWord = decodeUint(result)
     const shouldUpdate = shouldUpdateWord === null ? null : shouldUpdateWord !== 0n
     const payload = dynamicBytes(result, 1)
-    const recommended = shouldUpdate === true ? triggerTarget(payload) : null
+    const recommended = shouldUpdate === true ? triggerTarget(payload, input) : null
     const expected = /^\d+$/.test(input.expectedDebt) ? BigInt(input.expectedDebt) : null
     const tolerance = /^\d+$/.test(input.matchTolerance) ? BigInt(input.matchTolerance) : 0n
     const difference =
@@ -399,7 +446,7 @@ export async function readAllocatorTriggerReplays(
           : expected - recommended
         : null
     const status =
-      shouldUpdate === null
+      shouldUpdate === null || (shouldUpdate && recommended === null)
         ? 'unavailable'
         : shouldUpdate && difference !== null && difference <= tolerance
           ? 'matched'
@@ -414,7 +461,16 @@ export async function readAllocatorTriggerReplays(
       recommendedDebt: recommended?.toString() ?? null,
       absoluteDifference: difference?.toString() ?? null,
       matchTolerance: input.matchTolerance,
-      reason: shouldUpdate === false ? bytesText(payload) : null
+      reason:
+        input.family === 'unknown'
+          ? 'allocator_interface_unsupported'
+          : shouldUpdate === null
+            ? 'allocator_replay_unavailable'
+            : shouldUpdate && recommended === null
+              ? 'allocator_replay_payload_unavailable'
+              : shouldUpdate === false
+                ? bytesText(payload)
+                : null
     }
     const current = byTransaction.get(input.transactionHash) ?? []
     current.push(replay)
@@ -474,13 +530,13 @@ export async function readContractNames(
   return new Map(unique.map((contractAddress) => [contractAddress, decodeString(results.get(contractAddress) ?? null)]))
 }
 
-export async function readVaultDebtAllocators(
+export async function readVaultRoleManagers(
   chainId: number,
   vaultAddress: Address,
   blockNumbers: readonly number[]
 ): Promise<Map<number, Address | null>> {
   const unique = [...new Set(blockNumbers)]
-  const roleManagers = await readContractCalls(
+  const results = await readContractCalls(
     chainId,
     unique.map((blockNumber) => ({
       key: String(blockNumber),
@@ -489,21 +545,7 @@ export async function readVaultDebtAllocators(
       blockNumber
     }))
   )
-  const allocatorCalls = unique.flatMap((blockNumber): ContractCall[] => {
-    const roleManager = decodeAddress(roleManagers.get(String(blockNumber)) ?? null)
-    return roleManager
-      ? [
-          {
-            key: String(blockNumber),
-            address: roleManager,
-            data: encodeAddressCall(SELECTOR.debtAllocator, vaultAddress),
-            blockNumber
-          }
-        ]
-      : []
-  })
-  const allocators = await readContractCalls(chainId, allocatorCalls)
-  return new Map(unique.map((blockNumber) => [blockNumber, decodeAddress(allocators.get(String(blockNumber)) ?? null)]))
+  return new Map(unique.map((blockNumber) => [blockNumber, decodeAddress(results.get(String(blockNumber)) ?? null)]))
 }
 
 export const contractSelectors = SELECTOR

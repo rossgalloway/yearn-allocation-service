@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Allocator update — implementation review</title>
+<style>
+:root{color-scheme:light;background:#f7f7f4;color:#222;font:16px/1.55 system-ui,sans-serif}body{max-width:1050px;margin:0 auto;padding:52px 30px 80px}h1{font-size:34px;letter-spacing:-1px;line-height:1.15;margin:12px 0 22px}h2{font-size:21px;margin:42px 0 14px}p{max-width:850px}a{color:inherit;text-underline-offset:3px}code{font-size:13px;overflow-wrap:anywhere}table{border-collapse:collapse;width:100%;margin:22px 0}th,td{border-bottom:1px solid #ccc;text-align:left;padding:13px 15px 13px 0;vertical-align:top}th{font-size:12px;letter-spacing:.06em;text-transform:uppercase}small,.eyebrow{color:#666}.eyebrow{font:12px/1.5 monospace;text-transform:uppercase;letter-spacing:.08em}.notice{padding:18px 22px;border-left:3px solid #222;background:#ecece7}.links{display:flex;gap:18px;flex-wrap:wrap}footer{margin-top:50px;border-top:1px solid #aaa;padding-top:18px;font-size:13px;color:#555}@media(max-width:650px){body{padding:28px 18px}h1{font-size:29px}th,td{padding-right:10px;font-size:14px}.links{display:block}.links a{display:block;margin-bottom:8px}}
+</style></head>
+<body>
+<div class="eyebrow">Yearn allocation data · implementation review · 8 September 2026</div>
+<h1>Allocator assignments can point to any address.</h1>
+<p>The documents, Envio fallback, chain coverage, and local reference implementation have been updated. The Kong current-data milestone is prepared separately from full allocation history, while using the same assignment rules.</p>
+<p class="notice"><strong>Production activation remains pending.</strong> Envio changes are local. Kong's draft PR depends on publishing and validating that Envio follow-up. Tests and factory bytecode checks do not certify a complete replay or a database-backed indexer restart.</p>
+<div class="links"><a href="kong-allocation-history-spec-redline.html">Review the redline</a><a href="kong-spec-changes-summary.md">Changes summary</a><a href="kong-allocation-history-spec-proposed.md">Proposed specification</a><a href="envio-pr58-follow-up.md">Envio follow-up</a><a href="https://github.com/yearn/kong/pull/472">Kong draft PR</a></div>
+<h2>Delivery</h2>
+<table><thead><tr><th>Stage</th><th>Result</th><th>Location</th></tr></thead><tbody>
+<tr><td>Draft documents and redline</td><td>Updated arbitrary-address discovery, assignment authority, family adapters, chain scope, and independent current-data delivery. The redline is self-contained and generated from the preserved original.</td><td>This repository's <code>docs/</code></td></tr>
+<tr><td>Envio PR #58 follow-up</td><td>Implemented combined allocator registration for initial assignment, replacement, and factory discovery. Unknown evidence is retained for later association.</td><td>Local branch <code>codex/allocator-discovery-multichain</code><br>Commit <code>25360b3</code></td></tr>
+<tr><td>Base and Katana</td><td>Added shared-factory and assignment discovery to Base (8453) and Katana (747474), alongside Ethereum. Per-chain bytecode observations are recorded.</td><td>Envio configuration and <code>chain-discovery.json</code></td></tr>
+<tr><td>Reference service</td><td>Uses ordered assignments and family-specific RPC reads; retains scoped evidence per immutable run; rejects unresolved evidence for certification. Supports a configurable vault allowlist across all three chains.</td><td>Local branch <code>codex/allocator-assignment-reference</code></td></tr>
+<tr><td>Kong #471</td><td>Both GraphQL fields and saved snapshot ratios use one current assignment projection. Includes a read-only check and write mode for refreshing existing snapshots.</td><td><a href="https://github.com/yearn/kong/pull/472">Draft PR</a><br>Commit <code>12c83eb</code></td></tr>
+</tbody></table>
+<h2>What the current API means</h2>
+<table><thead><tr><th>Evidence</th><th>Address</th><th>Configuration</th></tr></thead><tbody>
+<tr><td>Supported assigned allocator</td><td>Assigned contract</td><td>Read using its family; successful zero remains zero</td></tr>
+<tr><td>Custom contract or address without code</td><td>Assigned address remains visible</td><td>Unsupported or no-code status; unavailable ratios</td></tr>
+<tr><td>Configuration RPC failure</td><td>Verified assigned address remains visible</td><td>Unavailable status and null ratios</td></tr>
+<tr><td>Explicit zero assignment</td><td>Null with cleared status</td><td>Old targets are cleared</td></tr>
+<tr><td>Missing or inconsistent assignment evidence</td><td>Unavailable with a reason</td><td>No factory or old allocator is substituted</td></tr>
+</tbody></table>
+<p>Deployment identifies the interface family. Assignment identifies the address selected for the vault. Shared factory governance is never interpreted as a vault address. Supported signatures from custom addresses are indexed through the combined discovery ABI; arbitrary interfaces do not become supported merely because they are assigned.</p>
+<h2>Verification</h2>
+<table><thead><tr><th>Repository</th><th>Passed</th><th>Limits</th></tr></thead><tbody>
+<tr><td>Envio</td><td>Codegen, TypeScript build, 13 allocator tests, historical fixture validation.</td><td>The PR base references missing monitoring-test and config-check scripts. Full replay and persisted runtime restart remain untested.</td></tr>
+<tr><td>Reference service</td><td>79 regular tests, two additional disposable-database tests, lint, and production build.</td><td>Existing materialized runs need migration 0004 and rematerialization under the new version. No production backfill was run.</td></tr>
+<tr><td>Kong</td><td>49 ingest mock tests, 88 web tests, one disposable-database integration test, all package lint checks, and production build.</td><td>Ingest TypeScript reports the same 17 existing diagnostics as main. The Envio deployment and production snapshot/cache activation remain pending.</td></tr>
+</tbody></table>
+<p>The yvUSDC-1 replacement was verified at block <strong>20,987,762</strong>, transaction index <strong>163</strong>, log index <strong>422</strong>. The regression test checks before and after that exact position; its surrounding events are synthetic. The database test verifies atomic address/ratio updates, accounting preservation, delayed-update rejection, and SQL/JavaScript projection agreement.</p>
+<h2>Rollout boundary</h2>
+<p>First publish and replay the Envio follow-up on each chain, validate discovery and restart behavior, and pin the source revision. Then run Kong's allocator refresh and the existing REST snapshot/cache refresh. REST retains its normal cache freshness window and exposes the saved revision. Full historical normalized storage, traces, policy matching, and chart materialization remain in the larger specification.</p>
+<footer>Private static review of local implementation work. No production deployment, Envio push, or reference-service push has been performed.</footer>
+</body></html>

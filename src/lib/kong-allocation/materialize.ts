@@ -1,15 +1,23 @@
 import type { VaultAccountingCheckpoint } from '@/lib/envio/types'
+import { blockEndPosition, resolveAllocatorAssignment } from './allocators'
 import {
   ArchiveRpcUpstreamError,
+  allocatorConfigurationCall,
   type ContractCall,
   contractSelectors,
   decodeUint,
   encodeAddressCall,
-  encodeAddressPairCall,
+  readAllocatorCode,
   readContractCalls,
-  readVaultDebtAllocators
+  readVaultRoleManagers
 } from './rpc'
-import type { Address, AllocationSourceEvent, AllocationState, AllocationStateStrategy } from './types'
+import type {
+  Address,
+  AllocationSourceEvent,
+  AllocationState,
+  AllocationStateStrategy,
+  AllocatorDeploymentEvidence
+} from './types'
 
 export interface StateBlock {
   blockNumber: number
@@ -20,11 +28,6 @@ export interface StateBlock {
 interface StrategyReference {
   address: Address
   firstSeenBlock: number
-}
-
-interface AllocatorReference {
-  address: Address
-  assignedBlock: number
 }
 
 function address(value: unknown): Address | null {
@@ -48,26 +51,6 @@ function strategyReferences(events: readonly AllocationSourceEvent[]): StrategyR
     }
   }
   return [...firstSeen].map(([strategyAddress, firstSeenBlock]) => ({ address: strategyAddress, firstSeenBlock }))
-}
-
-function allocatorReferences(events: readonly AllocationSourceEvent[]): AllocatorReference[] {
-  return events
-    .filter((event) => event.eventName === 'NewDebtAllocator' || event.eventName === 'UpdateDebtAllocator')
-    .map((event) => ({
-      address: address(event.eventName === 'UpdateDebtAllocator' ? event.args.debtAllocator : event.args.allocator),
-      assignedBlock: event.blockNumber
-    }))
-    .filter((item): item is AllocatorReference => item.address !== null)
-    .sort((left, right) => left.assignedBlock - right.assignedBlock)
-}
-
-function allocatorAtBlock(allocators: readonly AllocatorReference[], blockNumber: number): Address | null {
-  let selected: Address | null = null
-  for (const allocator of allocators) {
-    if (allocator.assignedBlock > blockNumber) break
-    selected = allocator.address
-  }
-  return selected
 }
 
 function key(blockNumber: number, field: string, address?: Address): string {
@@ -124,14 +107,40 @@ export async function materializeStates(input: {
   blocks: readonly StateBlock[]
   events: readonly AllocationSourceEvent[]
   checkpoints?: readonly VaultAccountingCheckpoint[]
+  deployments?: readonly AllocatorDeploymentEvidence[]
 }): Promise<MaterializedStates> {
   const strategies = strategyReferences(input.events)
-  const allocators = allocatorReferences(input.events)
-  const rpcAllocators = await readVaultDebtAllocators(
+  const managers = await readVaultRoleManagers(
     input.chainId,
     input.vaultAddress,
     input.blocks.map((block) => block.blockNumber)
   )
+  const resolutions = new Map(
+    input.blocks.map((block) => [
+      block.blockNumber,
+      resolveAllocatorAssignment({
+        vaultAddress: input.vaultAddress,
+        events: input.events,
+        at: blockEndPosition(block.blockNumber),
+        roleManagerAddress: managers.get(block.blockNumber) ?? null,
+        deployments: input.deployments
+      })
+    ])
+  )
+  const codes = await readAllocatorCode(
+    input.chainId,
+    [...resolutions.values()].flatMap((resolution) =>
+      resolution.address ? [{ address: resolution.address, blockNumber: resolution.asOfBlock }] : []
+    )
+  )
+  for (const resolution of resolutions.values()) {
+    if (!resolution.address) continue
+    const code = codes.get(`${resolution.asOfBlock}:${resolution.address}`)
+    if (code !== 'code') {
+      resolution.support = code === 'no_code' ? 'no_code' : 'unavailable'
+      resolution.reason = code === 'no_code' ? 'allocator_has_no_code' : 'allocator_code_unavailable'
+    }
+  }
   const calls = input.blocks.flatMap((block) => {
     const blockCalls: ContractCall[] = [
       {
@@ -154,7 +163,9 @@ export async function materializeStates(input: {
       }
     ]
     const candidates = strategies.filter((strategy) => strategy.firstSeenBlock <= block.blockNumber)
-    const allocator = rpcAllocators.get(block.blockNumber) ?? allocatorAtBlock(allocators, block.blockNumber)
+    const resolution = resolutions.get(block.blockNumber)
+    if (!resolution) throw new Error('Missing allocator resolution')
+    const allocator = resolution.address
     for (const strategy of candidates) {
       blockCalls.push({
         key: key(block.blockNumber, 'strategy', strategy.address),
@@ -162,11 +173,12 @@ export async function materializeStates(input: {
         data: encodeAddressCall(contractSelectors.strategies, strategy.address),
         blockNumber: block.blockNumber
       })
-      if (allocator) {
+      const configCall = allocatorConfigurationCall(resolution.family, input.vaultAddress, strategy.address)
+      if (allocator && resolution.support === 'supported' && configCall) {
         blockCalls.push({
           key: key(block.blockNumber, 'strategyConfig', strategy.address),
           address: allocator,
-          data: encodeAddressPairCall(contractSelectors.strategyConfig, input.vaultAddress, strategy.address),
+          data: configCall,
           blockNumber: block.blockNumber
         })
       }
@@ -179,22 +191,30 @@ export async function materializeStates(input: {
     const totalAssets = decodeUint(results.get(key(block.blockNumber, 'totalAssets')) ?? null)
     const indexedTotalDebt = decodeUint(results.get(key(block.blockNumber, 'totalDebt')) ?? null)
     const totalIdle = decodeUint(results.get(key(block.blockNumber, 'totalIdle')) ?? null)
-    if (totalAssets === null || totalIdle === null) {
+    if (totalAssets === null || totalIdle === null || indexedTotalDebt === null) {
       throw new ArchiveRpcUpstreamError(`Vault accounting calls failed at block ${block.blockNumber}`)
     }
 
-    const allocator = rpcAllocators.get(block.blockNumber) ?? allocatorAtBlock(allocators, block.blockNumber)
+    const resolution = resolutions.get(block.blockNumber)
+    if (!resolution) throw new Error('Missing allocator resolution')
+    const allocator = resolution.address
     const strategyRows = strategies
       .filter((strategy) => strategy.firstSeenBlock <= block.blockNumber)
       .map((strategy): AllocationStateStrategy => {
         const result = results.get(key(block.blockNumber, 'strategy', strategy.address)) ?? null
         const activation = decodeUint(result, 0)
         const lastReport = decodeUint(result, 1)
-        const currentDebt = decodeUint(result, 2) ?? 0n
+        const currentDebt = decodeUint(result, 2)
+        if (currentDebt === null)
+          throw new ArchiveRpcUpstreamError(`Strategy accounting call failed at block ${block.blockNumber}`)
         const maxDebt = decodeUint(result, 3)
         const strategyConfig = allocator
           ? (results.get(key(block.blockNumber, 'strategyConfig', strategy.address)) ?? null)
           : null
+        if (resolution.support === 'supported' && strategyConfig === null) {
+          resolution.support = 'unavailable'
+          resolution.reason = 'allocator_configuration_unavailable'
+        }
         const allocatorAdded = decodeUint(strategyConfig, 0)
         const targetRatio = decodeUint(strategyConfig, 1)
         const maxRatio = decodeUint(strategyConfig, 2)
@@ -213,8 +233,7 @@ export async function materializeStates(input: {
       })
       .sort((left, right) => left.strategyAddress.localeCompare(right.strategyAddress))
 
-    const summedDebt = strategyRows.reduce((sum, strategy) => sum + BigInt(strategy.currentDebt), 0n)
-    const totalDebt = indexedTotalDebt ?? summedDebt
+    const totalDebt = indexedTotalDebt
     const blockEvents = input.events.filter((event) => event.blockNumber === block.blockNumber)
     const unallocated = indexedUnallocated(checkpoints.get(block.blockNumber), totalAssets, totalDebt, totalIdle)
     return {
@@ -228,6 +247,7 @@ export async function materializeStates(input: {
       totalIdle: totalIdle.toString(),
       ...unallocated,
       allocatorAddress: allocator,
+      allocatorResolution: resolution,
       sourceEventIds: blockEvents.map((event) => event.id),
       strategies: strategyRows
     }

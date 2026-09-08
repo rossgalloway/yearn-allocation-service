@@ -15,12 +15,14 @@ function argument(name: string): string | null {
 
 const mode = argument('mode')
 if (mode !== 'backfill' && mode !== 'refresh') throw new Error('--mode must be backfill or refresh')
+const selectedChain = argument('chain')
 const selectedVault = argument('vault')?.toLowerCase() ?? null
 const vaults = listTestVaults().filter(
   (vault) =>
-    selectedVault === null ||
-    vault.label.toLowerCase() === selectedVault ||
-    vault.address.toLowerCase() === selectedVault
+    (selectedChain === null || vault.chainId === Number(selectedChain)) &&
+    (selectedVault === null ||
+      vault.label.toLowerCase() === selectedVault ||
+      vault.address.toLowerCase() === selectedVault)
 )
 if (vaults.length === 0) throw new Error(`Unknown test vault: ${selectedVault}`)
 

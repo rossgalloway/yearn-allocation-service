@@ -4,8 +4,8 @@ Reference: [Original Kong allocation history spec](https://hackmd.io/@murderteet
 
 This document is a short, standalone summary.
 
-- [Complete proposed Kong specification](https://artifacts.yearn.dev/1y/47756449095454c4cf5b4610e68a54a7.md)
-- [Redline against the original Kong specification](https://artifacts.yearn.dev/1y/0c278aa633caab6586d08c305cf04565.md)
+- [Complete proposed Kong specification](./kong-allocation-history-spec-proposed.md)
+- [Redline against the original Kong specification](./kong-allocation-history-spec-redline.html)
 
 ## Goal
 
@@ -16,6 +16,10 @@ ways:
 - **REST:** a small, fast chart response for public websites
 
 Both APIs read the same saved materialization run. They must not rebuild or classify history separately.
+
+The first Kong milestone also fixes [allocator discovery and API correctness, #471](https://github.com/yearn/kong/issues/471).
+Current allocator lookups and historical allocation processing share the same ordered assignment model. The current-data fix
+can ship before the complete allocation-history feature.
 
 ```text
 Blockchain
@@ -39,13 +43,39 @@ log index, and strategy address when relevant.
 The original event list remains useful. The proposed contract also requires:
 
 - `Deposit` and `Withdraw` as context for deposits, withdrawals, and debt changes
-- Vault-specific debt allocator assignment events
+- Initial and replacement allocator assignments from `AddedNewVault` and `UpdateDebtAllocator`
+- Factory deployment provenance, distinct from active vault assignments
 - Legacy and shared-allocator strategy-ratio events
 - Indexing coverage and known-gap records
 
 Envio does not need to provide RPC-enriched accounting snapshots for this design. Kong gets exact historical state from archive
 RPC. An Envio PR that adds the required event coverage is already open. Its event set and historical backfill are prerequisites
-before production activation.
+before production activation. The initial supported chains are Ethereum (`1`), Base (`8453`), and Katana (`747474`). Each chain
+requires its own configured discovery sources, replay evidence, indexing progress, and known-gap records.
+
+### Allocators can be any address
+
+The vaults team confirmed that both initial and replacement debt allocators may be arbitrary addresses, including custom
+contracts or addresses without contract code. Assignment is valid evidence even when Kong cannot read a familiar allocator
+interface. Neither Envio nor Kong may require a recognized factory before preserving an assignment.
+
+Envio registers assigned addresses with a discovery ABI covering the allocator event shapes it understands. This synthetic
+`AssignedDebtAllocator` category is an indexing mechanism, not a claim that the address implements a particular contract.
+It must cover both `AddedNewVault` and `UpdateDebtAllocator`, preserve registration across restart, and avoid narrowing capture
+when factory provenance arrives later. Unknown event shapes remain outside supported coverage; an empty event stream does not
+prove that the address is a supported allocator.
+
+Factory evidence identifies the contract family and deployment:
+
+- Vault-bound factories emit `NewDebtAllocator(allocator,vault)`.
+- Shared factories emit `NewDebtAllocator(allocator,governance)`.
+
+Both have the same canonical event signature, so the configured factory address and ABI determine the second argument's meaning.
+Neither event establishes the currently active assignment.
+
+Shared ratio events carry their own vault address. Shared keeper and governance events are stored once at allocator scope.
+Events without enough association evidence remain unresolved. Kong reads vault-scoped, allocator-scoped, and unresolved evidence
+and retains the source records when relating them to a vault's history.
 
 ## Data Kong gets from RPC
 
@@ -65,6 +95,11 @@ Archive RPC provides:
 Current RPC provides the latest safe block, current state, vault metadata, strategy names, and current strategy status. The same
 RPC provider may serve both roles if it supports historical reads.
 
+Configuration reads and `shouldUpdateDebt` replay select an adapter for the verified allocator family. Vault-bound methods
+take a strategy; shared methods take a vault and strategy. Custom or code-free addresses keep their assignment while unsupported
+configuration remains `null` with a reason. A successful zero ratio remains zero. RPC observations are recorded at their block
+and do not overwrite the indexed assignment history.
+
 ## Shared Kong data model
 
 Most of the original normalized model remains useful.
@@ -75,6 +110,8 @@ Most of the original normalized model remains useful.
 | `strategies` | Keep every strategy seen in history. Report its status at the latest safe block. |
 | `states` | Keep. Add action-boundary states and the latest safe state. Each state contains the strategies known at that block. |
 | `events` | Keep as normalized Envio evidence. |
+| Allocator identities and deployments | Add contract family, discovery evidence, and optional factory provenance. |
+| Vault allocator assignments | Add ordered initial/replacement assignments, Role Manager evidence, and resolution status. |
 | `transitions` and `effects` | Keep for atomic block, transaction, and event changes. |
 | `doa` | Replace a one-to-one execution annotation with a reusable allocation policy. |
 | `pendingDoaProposals` | Use evidence-based `unmatched` or `superseded` states. Do not make a proposal stale only because it is old. |
@@ -182,6 +219,11 @@ GraphQL is the drill-down interface for investigation and detailed tools. Client
 queries do not repeat Envio ingestion or RPC enrichment. The Kong maintainer owns the final GraphQL query names, connections,
 pagination, authorization, and rate limits.
 
+The existing `vault.allocator` and `allocator(chainId,vault).address` fields must use the same saved assignment projection and
+return the assigned address, including an unsupported custom address. Add assignment revision, as-of block, and support metadata;
+refresh affected vault snapshots and caches together. The allocator query's `vault` is the lookup context: several vaults can
+share one allocator. Historical requests remain pinned to the assignment evidence saved in their materialization run.
+
 ## REST output
 
 The required REST surface is the public chart response:
@@ -224,3 +266,13 @@ active. Cursors remain pinned to one run.
 Backfill and incremental refresh use the same ingestion, enrichment, grouping, classification, policy, interval, and validation
 logic. Production operation requires incremental tail processing and an old-run retention policy. Supported vaults should be
 discovered from Kong's Yearn V3 vault list instead of hardcoded.
+
+## Delivery order
+
+1. Complete Envio assignment discovery and evidence on Ethereum, Base, and Katana, including arbitrary assigned addresses.
+2. Deliver Kong #471: import that evidence, resolve current assignments, read supported configuration, and migrate existing
+   allocator APIs and saved vault data. Validate and activate this projection independently from full history.
+3. Reuse those components for allocation-history snapshots, grouping, policy matching, GraphQL, and REST.
+
+Implementation may proceed against pinned fixtures while upstream replay is prepared. Production activation requires verified
+coverage for the relevant chain and vault. Envio supplies indexing evidence; Kong owns RPC enrichment and timeline certification.

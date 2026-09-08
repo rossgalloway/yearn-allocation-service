@@ -77,7 +77,21 @@ describe('buildTransitions', () => {
       chainId: 1,
       vaultAddress: vault,
       points: [point(100)],
-      events: [allowKeeper, event({})]
+      events: [allowKeeper, event({})],
+      transactionContexts: new Map([
+        [
+          event({}).transactionHash,
+          {
+            hash: event({}).transactionHash,
+            from: keeper,
+            to: vault,
+            inputSelector: null,
+            traceStatus: 'available',
+            callPath: [vault],
+            immediateVaultCaller: vault
+          }
+        ]
+      ])
     })
 
     expect(transition.effects[0].actor).toEqual({ address: keeper, role: 'debt_allocator_keeper', label: null })

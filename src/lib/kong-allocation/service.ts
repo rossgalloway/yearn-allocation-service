@@ -13,6 +13,7 @@ import type {
   VaultAccountingCheckpointFailure,
   VaultAllocationCoverage
 } from '@/lib/envio/types'
+import { resolveAllocatorAssignment } from './allocators'
 import { buildTransitions, type TransitionPoint } from './classify'
 import { AllocationHistoryCursorError } from './cursor'
 import { processDoa } from './doa'
@@ -38,6 +39,7 @@ import type {
   AllocationHistoryStrategy,
   AllocationSourceEvent,
   AllocationState,
+  AllocatorDeploymentEvidence,
   Hash,
   NormalizedAllocationTimeline,
   RpcTransactionContext,
@@ -124,61 +126,33 @@ function hydrateTransactions(
   })
 }
 
-interface AllocatorAssignment {
-  address: Address
-  blockNumber: number
-}
-
-function eventAddress(value: unknown): Address | null {
-  return typeof value === 'string' && /^0x[a-fA-F0-9]{40}$/.test(value) ? (value.toLowerCase() as Address) : null
-}
-
-function allocatorAssignments(events: readonly AllocationSourceEvent[]): AllocatorAssignment[] {
-  return events
-    .filter((event) => event.eventName === 'NewDebtAllocator' || event.eventName === 'UpdateDebtAllocator')
-    .flatMap((event): AllocatorAssignment[] => {
-      const allocator = eventAddress(
-        event.eventName === 'UpdateDebtAllocator' ? event.args.debtAllocator : event.args.allocator
-      )
-      return allocator ? [{ address: allocator, blockNumber: event.blockNumber }] : []
-    })
-    .sort((left, right) => left.blockNumber - right.blockNumber)
-}
-
-function allocatorAtTransaction(
-  assignments: readonly AllocatorAssignment[],
-  blockNumber: number,
-  context: RpcTransactionContext | undefined,
-  stateAllocator: Address | null
-): Address | null {
-  const eligible = assignments.filter((assignment) => assignment.blockNumber <= blockNumber)
-  const path = new Set([...(context?.callPath ?? []), context?.to].filter((value): value is Address => value != null))
-  if (stateAllocator && path.has(stateAllocator)) return stateAllocator
-  return [...eligible].reverse().find((assignment) => path.has(assignment.address))?.address ?? null
-}
-
 function triggerReplayInputs(
   vaultAddress: Address,
   selectedEvents: readonly AllocationSourceEvent[],
   allEvents: readonly AllocationSourceEvent[],
   contexts: ReadonlyMap<Hash, RpcTransactionContext>,
   states: readonly AllocationState[],
-  assetDecimals: number | null
+  assetDecimals: number | null,
+  deployments: readonly AllocatorDeploymentEvidence[]
 ): AllocatorTriggerReplayInput[] {
-  const assignments = allocatorAssignments(allEvents)
-  const stateAllocators = new Map(states.map((state) => [state.blockNumber, state.allocatorAddress]))
+  const statesByBlock = new Map(states.map((state) => [state.blockNumber, state]))
   const seen = new Set<string>()
   return selectedEvents.flatMap((event): AllocatorTriggerReplayInput[] => {
     if (event.eventName !== 'DebtUpdated' || !event.strategyAddress) return []
     const expectedDebt = typeof event.args.newDebt === 'string' ? event.args.newDebt : null
     if (!expectedDebt || !/^\d+$/.test(expectedDebt)) return []
-    const allocatorAddress = allocatorAtTransaction(
-      assignments,
-      event.blockNumber,
-      contexts.get(event.transactionHash),
-      stateAllocators.get(event.blockNumber) ?? null
-    )
-    if (!allocatorAddress) return []
+    const before = statesByBlock.get(event.blockNumber - 1)?.allocatorResolution
+    const resolution = resolveAllocatorAssignment({
+      vaultAddress,
+      events: allEvents,
+      at: event,
+      roleManagerAddress: before?.roleManagerAddress ?? null,
+      deployments
+    })
+    const allocatorAddress = resolution.address
+    const context = contexts.get(event.transactionHash)
+    const path = [...(context?.callPath ?? []), context?.to]
+    if (!allocatorAddress || !path.some((value) => value?.toLowerCase() === allocatorAddress)) return []
     const key = `${event.transactionHash}:${event.strategyAddress}`
     if (seen.has(key)) return []
     seen.add(key)
@@ -189,6 +163,7 @@ function triggerReplayInputs(
       {
         transactionHash: event.transactionHash,
         allocatorAddress,
+        family: resolution.support === 'supported' ? resolution.family : 'unknown',
         vaultAddress,
         strategyAddress: event.strategyAddress,
         blockNumber: event.blockNumber,
@@ -459,6 +434,7 @@ export interface CompleteAllocationMaterialization {
   vault: VaultAllocationHistoryResponse['vault']
   entries: VaultAllocationHistoryResponse['entries']
   sourceEvents: AllocationSourceEvent[]
+  allocatorDeployments: AllocatorDeploymentEvidence[]
   allowProvisional: boolean
 }
 
@@ -481,11 +457,11 @@ export async function materializeCompleteKongAllocationHistory(
     optionalDoaOptimizations(vault.chainId)
   ])
   const limitations = [...head.limitations, ...checkpointResult.limitations]
-  if (!eventBatch.normalizedSupplementAvailable) {
+  if (!eventBatch.normalizedSupplementAvailable || eventBatch.unresolvedEventIds.length > 0) {
     if (!allowUncertified) {
-      throw new AllocationCoverageError('Envio normalized allocator configuration events are unavailable')
+      throw new AllocationCoverageError('Envio allocator evidence is unavailable or contains unresolved events')
     }
-    limitations.push('Envio normalized allocator configuration events are unavailable')
+    limitations.push('Envio allocator evidence is unavailable or contains unresolved events')
   }
   if (checkpointResult.failures.length > 0) {
     if (!allowUncertified) {
@@ -496,7 +472,7 @@ export async function materializeCompleteKongAllocationHistory(
     limitations.push(`Envio has ${checkpointResult.failures.length} unresolved checkpoint failures in this range`)
   }
   const materializationLimitations = uniqueLimitations(limitations)
-  const transitionBlocks = eventBlocks(eventBatch.events)
+  const transitionBlocks = eventBlocks(eventBatch.events).filter((block) => block.blockNumber >= range.fromBlock)
   const firstTransitionBlock = transitionBlocks[0]?.blockNumber ?? safeBlock.blockNumber
   const coverageStartBlock = head.coverage.safeForTimeline
     ? head.coverage.coverageStartBlock
@@ -532,6 +508,7 @@ export async function materializeCompleteKongAllocationHistory(
       vaultAddress: vault.address,
       blocks,
       events: hydratedEvents,
+      deployments: eventBatch.deployments,
       checkpoints: checkpointResult.checkpoints
     }),
     readVaultMetadata(vault.chainId, vault.address, safeBlock.blockNumber)
@@ -545,7 +522,8 @@ export async function materializeCompleteKongAllocationHistory(
       hydratedEvents,
       transactionContexts,
       materialized.states,
-      vaultMetadata.assetDecimals
+      vaultMetadata.assetDecimals,
+      eventBatch.deployments
     )
   )
   const latestState = materialized.states.find((state) => state.blockNumber === safeBlock.blockNumber)
@@ -598,6 +576,7 @@ export async function materializeCompleteKongAllocationHistory(
     vault: vaultMetadata,
     allowProvisional: !coverage.safeForTimeline,
     sourceEvents: hydratedEvents,
+    allocatorDeployments: eventBatch.deployments,
     entries: buildRestAllocationEntries({
       timeline: normalized,
       doaRecords: selectedDoaRecords,
@@ -619,6 +598,9 @@ async function loadHistory(input: {
     vaultAddress: input.vault.address,
     toBlock: safeBlock.blockNumber
   })
+  if (!eventBatch.normalizedSupplementAvailable || eventBatch.unresolvedEventIds.length > 0) {
+    throw new AllocationCoverageError('Envio allocator evidence is unavailable or contains unresolved events')
+  }
   const allEventBlocks = eventBlocks(eventBatch.events)
   const safeBlockIsEvent = allEventBlocks.some((block) => block.blockNumber === safeBlock.blockNumber)
   const selectedEventBlocks = eventBlocks(
@@ -657,6 +639,7 @@ async function loadHistory(input: {
       vaultAddress: input.vault.address,
       blocks,
       events: hydratedEvents,
+      deployments: eventBatch.deployments,
       checkpoints
     }),
     readVaultMetadata(input.vault.chainId, input.vault.address, safeBlock.blockNumber),
@@ -670,7 +653,8 @@ async function loadHistory(input: {
       hydratedEvents,
       transactionContexts,
       materialized.states,
-      vaultMetadata.assetDecimals
+      vaultMetadata.assetDecimals,
+      eventBatch.deployments
     )
   )
   const latestState = materialized.states.find((state) => state.blockNumber === safeBlock.blockNumber)

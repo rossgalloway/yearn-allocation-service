@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decodeAddress, decodeString, decodeUint, encodeAddressCall, encodeAddressPairCall } from './rpc'
+import { decodeAddress, decodeString, decodeUint, encodeAddressCall, encodeAddressPairCall, triggerTarget } from './rpc'
 import type { Address, Hash } from './types'
 
 describe('archive RPC ABI helpers', () => {
@@ -29,5 +29,16 @@ describe('archive RPC ABI helpers', () => {
     expect(encodeAddressPairCall('0x12345678', vault, strategy)).toBe(
       `0x12345678${vault.slice(2).padStart(64, '0')}${strategy.slice(2).padStart(64, '0')}`
     )
+  })
+})
+
+describe('allocator trigger payloads', () => {
+  it('validates the family selector and every address before interpreting a zero target', () => {
+    const vault = '0x1234567890abcdef1234567890abcdef12345678' as Address
+    const strategy = '0xabcdefabcdefabcdefabcdefabcdefabcdefabcd' as Address
+    const payload = `${encodeAddressPairCall('0xda5f3286', vault, strategy)}${'0'.repeat(64)}` as Hash
+    expect(triggerTarget(payload, { family: 'shared', vaultAddress: vault, strategyAddress: strategy })).toBe(0n)
+    expect(triggerTarget(payload, { family: 'vault_bound', vaultAddress: vault, strategyAddress: strategy })).toBeNull()
+    expect(triggerTarget(payload, { family: 'shared', vaultAddress: strategy, strategyAddress: vault })).toBeNull()
   })
 })

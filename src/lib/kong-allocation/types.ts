@@ -3,6 +3,31 @@ export type Hash = `0x${string}`
 export type TimelineDirection = 'asc' | 'desc'
 export type AllocationHistoryProjection = 'full' | 'chart'
 
+export type AllocatorFamily = 'vault_bound' | 'shared' | 'unknown'
+
+export interface AllocatorDeploymentEvidence {
+  allocatorAddress: Address
+  factoryAddress: Address
+  family: Exclude<AllocatorFamily, 'unknown'>
+  boundVaultAddress: Address | null
+  governanceAddress: Address | null
+  createdBlock: number
+  sourceEventId: string
+  abiVariant: string
+}
+
+export interface AllocatorResolution {
+  address: Address | null
+  assignmentId: string | null
+  roleManagerAddress: Address | null
+  status: 'assigned' | 'cleared' | 'unavailable'
+  reason: string | null
+  family: AllocatorFamily
+  support: 'supported' | 'unsupported' | 'no_code' | 'unavailable'
+  asOfBlock: number
+  deploymentSourceEventId: string | null
+}
+
 export interface NormalizedAllocationTimeline {
   generatedAt: number
   vault: VaultAllocationVault
@@ -257,6 +282,7 @@ export interface AllocationState {
   unallocatedSource: 'envio_same_block_checkpoint' | null
   unallocatedCheckpointId: string | null
   allocatorAddress: Address | null
+  allocatorResolution?: AllocatorResolution
   sourceEventIds: string[]
   strategies: AllocationStateStrategy[]
 }
@@ -341,9 +367,16 @@ export interface AllocationTransition {
 }
 
 export interface AllocationSourceEvent {
+  chainId?: number
+  vaultAddress?: Address | null
+  scope?: 'vault' | 'allocator'
+  abiVariant?: string | null
+  associationEvidence?: string | null
+  normalizationVersion?: number | null
+  blockHash?: Hash | null
   id: string
   sourceAddress: Address
-  sourceLabel: 'vault' | 'debtAllocator' | 'debtManagerFactory' | 'unknown'
+  sourceLabel: 'vault' | 'roleManager' | 'debtAllocator' | 'debtManagerFactory' | 'unknown'
   eventName: string
   signature: Hash
   blockNumber: number
@@ -450,6 +483,7 @@ export interface AllocationEntryState {
   unallocatedSource: 'envio_same_block_checkpoint' | null
   unallocatedCheckpointId: string | null
   allocatorAddress: Address | null
+  allocatorResolution?: AllocatorResolution
   allocations: AllocationEntryStrategyState[]
   accountingChecks: {
     totalAssetsEqualsDebtPlusIdle: boolean | null

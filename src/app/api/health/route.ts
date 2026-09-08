@@ -16,9 +16,10 @@ function staleRunMilliseconds(): number {
 }
 
 export async function GET() {
+  const vaults = listTestVaults()
   const ingestion = {
     envioAllocationHistory: Boolean(process.env.ENVIO_ALLOCATION_GRAPHQL_URL),
-    ethereumArchiveRpc: Boolean(process.env.RPC_URL_1?.trim()),
+    archiveRpcs: vaults.every((vault) => Boolean(process.env[`RPC_URL_${vault.chainId}`]?.trim())),
     immutableCoverageRevision: Boolean(process.env.ENVIO_ALLOCATION_COVERAGE_REVISION)
   }
   const doaOptimizationRedis = Boolean(
@@ -43,11 +44,14 @@ export async function GET() {
       item.entryCount > 0 &&
       (allowUncertifiedMaterializations || expectedRevision === null || item.coverageRevision === expectedRevision)
   )
-  const activeVaults = new Set(validMaterializations.map((item) => item.vaultAddress))
+  const activeVaults = new Set(
+    validMaterializations.map((item) => `${item.chainId}:${item.vaultAddress.toLowerCase()}`)
+  )
   const servingReady =
     sourceValid &&
     (useDatabase
-      ? postgresReachable && listTestVaults().every((vault) => activeVaults.has(vault.address.toLowerCase()))
+      ? postgresReachable &&
+        vaults.every((vault) => activeVaults.has(`${vault.chainId}:${vault.address.toLowerCase()}`))
       : Object.values(ingestion).every(Boolean))
   const staleCutoff = Date.now() - staleRunMilliseconds()
   const refreshHealthy = materializations.every((item) => {

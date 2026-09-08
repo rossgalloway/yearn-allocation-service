@@ -68,7 +68,7 @@ endpoint. Each record's `allocationSnapshot` is the canonical current-allocation
 
 Reports the selected serving source, Postgres reachability, active materializations, their certification metadata, and the
 latest refresh result. It never returns URLs or tokens. In database mode, readiness requires a schema-version-2 run for all
-three test vaults; those runs must be certified unless the explicit test-only provisional switch is enabled.
+configured vaults; those runs must be certified unless the explicit test-only provisional switch is enabled.
 
 ### `GET /api/rest/views/allocation-history/:chainId/:address` (test)
 
@@ -76,8 +76,7 @@ Without a `projection` parameter, returns the schema-version-2 evidence-rich RES
 contains vault metadata, pagination, and a denormalized `entries` array; it does not expose top-level strategies, states,
 transitions, proposals, or raw events.
 Background jobs read events from Envio, enrich them through the configured archive RPC, and atomically activate a Postgres
-read-model generation. Public requests then read only Postgres. The implementation is intentionally limited to Ethereum and
-these vaults:
+read-model generation. Public requests then read only Postgres. The default reference vaults are:
 
 - `yvUSDC-1`: `0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204`
 - `yvUSDT-1`: `0x310B7Ea7475A0B449Cfd73bE81522F1B88eFAFaa`
@@ -192,3 +191,12 @@ The repository follows the same Yearn Vercel deployment pattern as `katana-apr-s
 - `ALLOCATION_HISTORY_SOURCE=database` after all backfills pass health checks
 
 `ALLOW_UNSAFE_ALLOCATION_DATA` and `ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION` must remain false in production.
+
+
+### Allocator assignment reference update
+
+Allocator assignments come from Envio `AddedNewVault` and `UpdateDebtAllocator` evidence from the authoritative Role Manager. Factory deployments identify the contract family; they never assign a vault. Initial custom addresses, replacement addresses, and zero clears are retained independently of ABI support. Responses include `allocatorResolution` with the assignment, support state, family, and block used for enrichment. Shared allocator control events retain allocator scope. Unresolved evidence prevents certified publication.
+
+Ethereum (1), Base (8453), and Katana (747474) are supported through `ALLOCATION_VAULTS_JSON`, an explicit array of `{chainId,address,label}` objects. Configure each selected chain's `RPC_URL_<chainId>` and obtain per-vault immutable coverage before backfilling. The three existing Ethereum samples remain the default. `--chain=<chainId>` selects a chain for the materialization script.
+
+Run migrations before rematerializing: migration 0004 retains allocator evidence with each run. The materializer version changed to `allocation-history-v2-allocator-assignment`; earlier runs must be rebuilt. This requires the local follow-up to Envio PR #58 described in [the implementation notes](docs/envio-pr58-follow-up.md). Envio schema availability and deterministic fixture tests are not proof of complete production replay or certified history on any chain.

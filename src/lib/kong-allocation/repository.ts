@@ -17,6 +17,7 @@ import type {
   AllocationChartState,
   AllocationHistoryEntry,
   AllocationSourceEvent,
+  AllocatorDeploymentEvidence,
   MaterializedAllocationChartPayload,
   TimelineDirection,
   VaultAllocationChartResponse,
@@ -27,7 +28,7 @@ import type {
 import type { TestVault } from './vaults'
 
 export const ALLOCATION_SCHEMA_VERSION = 2
-export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v2-lean-chart'
+export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v2-allocator-assignment'
 const DEFAULT_STALE_RUN_SECONDS = 6 * 60 * 60
 const ENTRY_INSERT_BATCH_SIZE = 250
 
@@ -566,6 +567,7 @@ export async function completeMaterializationRun(input: {
   vault: VaultAllocationVault
   entries: readonly AllocationHistoryEntry[]
   sourceEvents?: readonly AllocationSourceEvent[]
+  allocatorDeployments?: readonly AllocatorDeploymentEvidence[]
   allowProvisional?: boolean
 }): Promise<void> {
   const coverageIssues = allocationCoverageContractIssues(input.coverage)
@@ -703,6 +705,7 @@ export async function completeMaterializationRun(input: {
            coverage_known_gaps = $12::jsonb,
            vault_payload = $13::jsonb,
            entry_count = $14,
+           allocator_evidence = $15::jsonb,
            completed_at = now()
        WHERE id = $1::bigint`,
       [
@@ -719,7 +722,16 @@ export async function completeMaterializationRun(input: {
         input.coverage.safeForTimeline,
         JSON.stringify(input.coverage.knownGaps),
         JSON.stringify(input.vault),
-        input.entries.length
+        input.entries.length,
+        JSON.stringify({
+          deployments: input.allocatorDeployments ?? [],
+          events: (input.sourceEvents ?? []).filter(
+            (event) =>
+              event.sourceLabel === 'debtAllocator' ||
+              event.sourceLabel === 'roleManager' ||
+              event.eventName === 'UpdateRoleManager'
+          )
+        })
       ]
     )
     if (completed.rowCount !== 1) throw new Error('Materialization run completion failed')
