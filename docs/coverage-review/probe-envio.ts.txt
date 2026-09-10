@@ -1,0 +1,14 @@
+import {envioGraphqlRequest as q} from '/home/dev/raaaws/yearn-allocation-service/src/lib/envio/client.ts';
+const all=await Bun.file('/home/dev/raaaws/yearn-allocation-service/docs/coverage-review/vault-inventory-2026-09-10.json').json();
+const vaults=all.vaults.filter((v:any)=>v.kind==='Multi Strategy'&&v.inclusion.isYearn);
+const result:any={checkedAt:new Date().toISOString(),rpcConfigured:Object.fromEntries([1,8453,747474].map(c=>[c,!!process.env[`RPC_URL_${c}`]])),vaults:[]};
+for(const v of vaults){
+ const query=`query($chain:Int!,$address:String!,$lower:String!){
+ debtFirst:DebtUpdated(where:{chainId:{_eq:$chain},vaultAddress:{_eq:$address}},order_by:{blockNumber:asc},limit:1){blockNumber transactionHash}
+ debtLast:DebtUpdated(where:{chainId:{_eq:$chain},vaultAddress:{_eq:$address}},order_by:{blockNumber:desc},limit:1){blockNumber}
+ assignments:AllocationSourceEvent(where:{chainId:{_eq:$chain},vaultAddress:{_eq:$lower},eventName:{_in:["AddedNewVault","UpdateDebtAllocator"]}},order_by:{blockNumber:desc},limit:1){blockNumber eventName normalizationVersion argsJson}
+ }`;
+ try{const evidence=await q(query,{chain:v.chainId,address:v.address,lower:v.address.toLowerCase()});result.vaults.push({chainId:v.chainId,address:v.address,symbol:v.symbol,...evidence});}catch(e:any){result.vaults.push({chainId:v.chainId,address:v.address,error:e.message});}
+}
+await Bun.write('/home/dev/raaaws/yearn-allocation-service/docs/coverage-review/envio-probe-2026-09-10.json',JSON.stringify(result,null,2)+'\n');
+console.log(JSON.stringify(result));

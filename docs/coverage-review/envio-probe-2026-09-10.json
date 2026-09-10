@@ -1,0 +1,520 @@
+{
+  "checkedAt": "2026-09-10T18:55:46.630Z",
+  "rpcConfigured": {
+    "1": true,
+    "8453": true,
+    "747474": true
+  },
+  "vaults": [
+    {
+      "chainId": 1,
+      "address": "0x9F4330700a36B29952869fac9b33f45EEdd8A3d8",
+      "symbol": "yBOLD",
+      "debtFirst": [
+        {
+          "blockNumber": 22597752,
+          "transactionHash": "0xda0a63c1d610017b1fbb2affb7abec4e430a7777188ca101b8084f432de00a4a"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25948764
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x9f4330700a36b29952869fac9b33f45eedd8a3d8\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0xBF319dDC2Edc1Eb6FDf9910E39b37Be221C8805F",
+      "symbol": "yvcrvUSD-2",
+      "debtFirst": [
+        {
+          "blockNumber": 19676681,
+          "transactionHash": "0x5fcbeed6f9e9a16ec4f272dd854dc39aaab8fa9c9f256da957302c4c84f8a055"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25948114
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xbf319ddc2edc1eb6fdf9910e39b37be221c8805f\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"2\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0x028eC7330ff87667b6dfb0D94b954c820195336c",
+      "symbol": "yvDAI-1",
+      "debtFirst": [
+        {
+          "blockNumber": 19455879,
+          "transactionHash": "0x4ed5d53ea191600894dbda043926f51eb2e44638c0af76f1fc0434a361025f9e"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25864125
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x028ec7330ff87667b6dfb0d94b954c820195336c\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0x863687e4E9751b57F38b4B0ebA04744C72d0f7B8",
+      "symbol": "yvFlexUSDC",
+      "debtFirst": [],
+      "debtLast": [],
+      "assignments": [
+        {
+          "blockNumber": 25933451,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x863687e4e9751b57f38b4b0eba04744c72d0f7b8\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"420\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0xaF71a4f5d93fb88B24C67760BCF9688a6C3A54D4",
+      "symbol": "yvSKY-1",
+      "debtFirst": [
+        {
+          "blockNumber": 22746847,
+          "transactionHash": "0x82a9b0753da92428127cf6e6837bcea0628e8e6e15989caf496a3a660ded91c7"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25888741
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xaf71a4f5d93fb88b24c67760bcf9688a6c3a54d4\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0x696d02Db93291651ED510704c9b286841d506987",
+      "symbol": "yvUSD",
+      "debtFirst": [
+        {
+          "blockNumber": 24272237,
+          "transactionHash": "0xdec3bb6eebc82e0855ff13d8657a15802b3ea526bacbf1a464a1977f45f9bafb"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25948492
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24730237,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x696d02db93291651ed510704c9b286841d506987\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"69\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204",
+      "symbol": "yvUSDC-1",
+      "debtFirst": [
+        {
+          "blockNumber": 19463918,
+          "transactionHash": "0x74252f22ffd92bd4f8cd7a573dab393af4d756dd0c12f49497296465381e98a3"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25948583
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xbe53a109b494e5c9f97b9cd39fe969be68bf6204\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0xAe7d8Db82480E6d8e3873ecbF22cf17b3D8A7308",
+      "symbol": "yvUSDC-2",
+      "debtFirst": [
+        {
+          "blockNumber": 19732502,
+          "transactionHash": "0x5ee5f0e849d15690b5ae52c93063e280d0c12a18c51fc72b38e1aeb9c772325f"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25860800
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xae7d8db82480e6d8e3873ecbf22cf17b3d8a7308\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"2\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0x182863131F9a4630fF9E27830d945B1413e347E8",
+      "symbol": "yvUSDS-1",
+      "debtFirst": [
+        {
+          "blockNumber": 20925314,
+          "transactionHash": "0xca08ce1ffb595ba4a589bbcdb01bcac0da6b74df25d17e8a99c02cdd1402216b"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25948583
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x182863131f9a4630ff9e27830d945b1413e347e8\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0x310B7Ea7475A0B449Cfd73bE81522F1B88eFAFaa",
+      "symbol": "yvUSDT-1",
+      "debtFirst": [
+        {
+          "blockNumber": 20428290,
+          "transactionHash": "0x5c9680830e2205ce6304f8579fb19d8c6ddb547df45990da0c919cdced323326"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25943420
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x310b7ea7475a0b449cfd73be81522f1b88efafaa\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0x751F0cC6115410A3eE9eC92d08f46Ff6Da98b708",
+      "symbol": "yvWBTC-1",
+      "debtFirst": [
+        {
+          "blockNumber": 22583039,
+          "transactionHash": "0x3f3751c5d53798e97898ff5dd68aa54265befc249f49b028bd98946ac205e8bf"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25781666
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x751f0cc6115410a3ee9ec92d08f46ff6da98b708\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0xc56413869c6CDf96496f2b1eF801fEDBdFA7dDB0",
+      "symbol": "yvWETH-1",
+      "debtFirst": [
+        {
+          "blockNumber": 19455879,
+          "transactionHash": "0x4ed5d53ea191600894dbda043926f51eb2e44638c0af76f1fc0434a361025f9e"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25945211
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xc56413869c6cdf96496f2b1ef801fedbdfa7ddb0\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0xAc37729B76db6438CE62042AE1270ee574CA7571",
+      "symbol": "yvWETH-2",
+      "debtFirst": [
+        {
+          "blockNumber": 19455879,
+          "transactionHash": "0x4ed5d53ea191600894dbda043926f51eb2e44638c0af76f1fc0434a361025f9e"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25927317
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783307,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xac37729b76db6438ce62042ae1270ee574ca7571\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"2\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 1,
+      "address": "0x1F6f16945e395593d8050d6Cc33e4328a515B648",
+      "symbol": "yvyYB",
+      "debtFirst": [
+        {
+          "blockNumber": 24072947,
+          "transactionHash": "0xf984d6a4adf224bbb7f5f2e4640801901210c09d51abae80d352b1cb249fe3f6"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 25948495
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24783309,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x1f6f16945e395593d8050d6cc33e4328a515b648\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 8453,
+      "address": "0xb13CF163d916917d9cD6E836905cA5f12a1dEF4B",
+      "symbol": "TYD",
+      "debtFirst": [
+        {
+          "blockNumber": 32384531,
+          "transactionHash": "0xfd938753a034f2b70e9e44673774c91ad15398fe5d765825fde5c7d058b5fa41"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 50987518
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 42679928,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xb13cf163d916917d9cd6e836905ca5f12a1def4b\",\"debtAllocator\":\"0x687c4c48867af1f36eacd977f311b47b1a25a45b\",\"category\":\"100\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 8453,
+      "address": "0xc3BD0A2193c8F027B82ddE3611D18589ef3f62a9",
+      "symbol": "yvUSDC-H",
+      "debtFirst": [
+        {
+          "blockNumber": 25385596,
+          "transactionHash": "0x77b5d7a38e0346c0b6bdee2eea2ac9609995da9e4d4103b912e71d5be0f92b62"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 51137802
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 42679928,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xc3bd0a2193c8f027b82dde3611d18589ef3f62a9\",\"debtAllocator\":\"0x687c4c48867af1f36eacd977f311b47b1a25a45b\",\"category\":\"3\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 747474,
+      "address": "0x93Fec6639717b6215A48E5a72a162C50DCC40d68",
+      "symbol": "yvAUSD",
+      "debtFirst": [
+        {
+          "blockNumber": 4905460,
+          "transactionHash": "0xb6021237a71fadaf6abb5c85045107a3121464a728c9e9224c88063c1eb3dc58"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 40502590
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24007507,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x93fec6639717b6215a48e5a72a162c50dcc40d68\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 747474,
+      "address": "0xE007CA01894c863d7898045ed5A3B4Abf0b18f37",
+      "symbol": "yvvbETH",
+      "debtFirst": [
+        {
+          "blockNumber": 4660717,
+          "transactionHash": "0xacf3e2675d7c03693a76dd6a06355139ac4caea7292154c7d227f3e829b228fc"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 42308244
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24007507,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xe007ca01894c863d7898045ed5a3b4abf0b18f37\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 747474,
+      "address": "0x80c34BD3A3569E126e7055831036aa7b212cB159",
+      "symbol": "yvvbUSDC",
+      "debtFirst": [
+        {
+          "blockNumber": 4660720,
+          "transactionHash": "0xd4b795f01bbbb727bf9b005563587d3ff2832e79168149e8e181656c769a8516"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 42321857
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24007507,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x80c34bd3a3569e126e7055831036aa7b212cb159\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 747474,
+      "address": "0x8Fb1c10Ad4417EcA341a1D903Ff437d25ff87a4e",
+      "symbol": "yvvbUSDS",
+      "debtFirst": [],
+      "debtLast": [],
+      "assignments": [
+        {
+          "blockNumber": 24007507,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x8fb1c10ad4417eca341a1d903ff437d25ff87a4e\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 747474,
+      "address": "0x9A6bd7B6Fd5C4F87eb66356441502fc7dCdd185B",
+      "symbol": "yvvbUSDT",
+      "debtFirst": [
+        {
+          "blockNumber": 4660714,
+          "transactionHash": "0xb593946b786e9fecd839cadae6964bd08fbbd97be37f2463a31d03869c5ddf15"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 42127424
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24007507,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0x9a6bd7b6fd5c4f87eb66356441502fc7dcdd185b\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    },
+    {
+      "chainId": 747474,
+      "address": "0xAa0362eCC584B985056E47812931270b99C91f9d",
+      "symbol": "yvvbWBTC",
+      "debtFirst": [
+        {
+          "blockNumber": 4660712,
+          "transactionHash": "0xaea3130ffeaa92c73b20e1f80eea7273e89ee32520766a8cd2916e0d5b8e8d36"
+        }
+      ],
+      "debtLast": [
+        {
+          "blockNumber": 42164385
+        }
+      ],
+      "assignments": [
+        {
+          "blockNumber": 24007507,
+          "eventName": "AddedNewVault",
+          "normalizationVersion": 3,
+          "argsJson": "{\"vault\":\"0xaa0362ecc584b985056e47812931270b99c91f9d\",\"debtAllocator\":\"0x1e9eb053228b1156831759401de0e115356b8671\",\"category\":\"1\"}"
+        }
+      ]
+    }
+  ]
+}

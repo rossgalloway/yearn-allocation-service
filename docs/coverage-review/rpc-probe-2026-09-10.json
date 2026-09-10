@@ -1,0 +1,58 @@
+[
+  {
+    "chainId": 1,
+    "sample": "yBOLD",
+    "block": "0x158d078",
+    "archiveDebtCall": {
+      "result": "0x000000000000000000000000000000000000000000000005e8641362b3c01484"
+    },
+    "trace": {
+      "success": true,
+      "frames": 358
+    }
+  },
+  {
+    "chainId": 8453,
+    "sample": "TYD",
+    "block": "0x1ee2613",
+    "archiveDebtCall": {
+      "result": "0x0000000000000000000000000000000000000000000000000000000272660321"
+    },
+    "trace": {
+      "success": true,
+      "frames": 113
+    }
+  },
+  {
+    "chainId": 747474,
+    "sample": "yvAUSD",
+    "block": "0x4ad9f4",
+    "archiveDebtCall": {
+      "result": "0x00000000000000000000000000000000000000000000000000000125bb2147e5"
+    },
+    "trace": {
+      "success": true,
+      "frames": 79
+    }
+  },
+  {
+    "symbol": "yvFlexUSDC",
+    "chainId": 1,
+    "caseInsensitiveDebtEvents": {
+      "DebtUpdated": []
+    },
+    "currentDebt": {
+      "result": "0x00000000000000000000000000000000000000000000000000000103130aad44"
+    }
+  },
+  {
+    "symbol": "yvvbUSDS",
+    "chainId": 747474,
+    "caseInsensitiveDebtEvents": {
+      "DebtUpdated": []
+    },
+    "currentDebt": {
+      "result": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  }
+]
