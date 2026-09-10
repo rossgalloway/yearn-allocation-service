@@ -117,3 +117,25 @@ DATABASE_URL=postgres://... TEST_DATABASE_URL=postgres://... bun run test:db
 The integration suite applies migrations, exercises atomic activation, verifies cursor stability across a refresh, confirms a
 failed refresh preserves the last good run, rejects concurrent jobs, and recovers an interrupted stale run. It only runs when
 `DATABASE_URL` and `TEST_DATABASE_URL` are the same explicit URL.
+
+## Multicall3 reads
+
+The reference materializer opts compatible vault accounting and supported allocator-configuration getters into
+Multicall3 `aggregate3`, grouped by chain and exact historical block, with at most 50 subcalls per aggregate.
+Vault/token metadata and contract names use the same path. Trigger replays remain direct because wrapping a call changes
+`msg.sender`; arbitrary callers of `readContractCalls` remain direct unless explicitly opted in. Transaction traces,
+transaction lookups, block reads, and bytecode reads remain JSON-RPC methods.
+
+On Ethereum, Base, and Katana, each eligible block group first checks for Multicall3 bytecode at that historical block.
+Blocks before deployment and singleton groups use direct reads. Unsupported chains use direct reads. Deployment-check
+failures and malformed/failed outer aggregates fail explicitly without automatically multiplying requests through direct
+fallback. Each reverted subcall produces null; successful zero and empty return data remain distinct.
+
+A bounded live comparison on 2026-09-10 read six getters at two historical blocks per chain. All results matched direct
+reads: 12 `eth_call` methods became two aggregate `eth_call` methods plus two `eth_getCode` checks on each chain.
+See `docs/coverage-review/multicall-validation.json`. These are RPC method counts, not measured provider charges.
+JSON-RPC transport batching still limits each HTTP batch to 100 methods.
+
+This change does not introduce a persistent historical RPC cache or incremental materialization. Avoid frequent full
+refreshes until recurring workload and provider billing units have been measured. Public database-backed requests continue
+to make no RPC calls. No rematerialization is required solely for this transport change; the next scheduled/manual run uses it.

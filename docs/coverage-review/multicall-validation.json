@@ -1,0 +1,56 @@
+{
+  "checkedAt": "2026-09-10T19:17:59.827Z",
+  "results": [
+    {
+      "chainId": 1,
+      "vault": "yBOLD",
+      "blocks": [
+        22597751,
+        22597752
+      ],
+      "reads": 12,
+      "equal": true,
+      "direct": {
+        "eth_call": 12
+      },
+      "multicall": {
+        "eth_getCode": 2,
+        "eth_call": 2
+      }
+    },
+    {
+      "chainId": 8453,
+      "vault": "TYD",
+      "blocks": [
+        32384530,
+        32384531
+      ],
+      "reads": 12,
+      "equal": true,
+      "direct": {
+        "eth_call": 12
+      },
+      "multicall": {
+        "eth_getCode": 2,
+        "eth_call": 2
+      }
+    },
+    {
+      "chainId": 747474,
+      "vault": "yvAUSD",
+      "blocks": [
+        4905459,
+        4905460
+      ],
+      "reads": 12,
+      "equal": true,
+      "direct": {
+        "eth_call": 12
+      },
+      "multicall": {
+        "eth_getCode": 2,
+        "eth_call": 2
+      }
+    }
+  ]
+}

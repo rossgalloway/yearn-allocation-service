@@ -1,3 +1,10 @@
+import {
+  decodeMulticall,
+  encodeMulticall,
+  MULTICALL3_ADDRESS,
+  MULTICALL3_CHAINS,
+  MULTICALL3_PAGE_SIZE
+} from './multicall'
 import type {
   Address,
   AllocatorFamily,
@@ -223,17 +230,78 @@ export async function readAllocatorCode(
 
 export async function readContractCalls(
   chainId: number,
-  calls: readonly ContractCall[]
+  calls: readonly ContractCall[],
+  options: { multicall?: boolean } = {}
 ): Promise<Map<string, Hash | null>> {
   if (calls.length === 0) return new Map()
-  const responses = await batchedRequests(
+  // Opt-in only: Multicall changes msg.sender and must not wrap trigger replay.
+  const groups = new Map<number, ContractCall[]>()
+  for (const call of calls) {
+    const group = groups.get(call.blockNumber) ?? []
+    group.push(call)
+    groups.set(call.blockNumber, group)
+  }
+  const eligible =
+    options.multicall && MULTICALL3_CHAINS.has(chainId)
+      ? [...groups.entries()].filter(([, group]) => group.length > 1)
+      : []
+  const code = await batchedRequests(
     chainId,
-    calls.map((call) => ({
-      method: 'eth_call',
-      params: [{ to: call.address, data: call.data }, blockTag(call.blockNumber)]
+    eligible.map(([block]) => ({
+      method: 'eth_getCode',
+      params: [MULTICALL3_ADDRESS, blockTag(block)]
     }))
   )
-  return new Map(calls.map((call, index) => [call.key, hexData(responses[index]?.result)]))
+  const available = new Set<number>()
+  eligible.forEach(([block], index) => {
+    const value = hexData(code[index]?.result)
+    if (value === null) throw new ArchiveRpcUpstreamError('Unable to verify historical Multicall3 deployment')
+    if (value !== '0x') available.add(block)
+  })
+  const pages: { calls: ContractCall[]; aggregate: boolean }[] = []
+  for (const [block, group] of groups) {
+    if (!available.has(block)) {
+      for (const call of group) pages.push({ calls: [call], aggregate: false })
+    } else {
+      for (let start = 0; start < group.length; start += MULTICALL3_PAGE_SIZE) {
+        const page = group.slice(start, start + MULTICALL3_PAGE_SIZE)
+        pages.push({ calls: page, aggregate: page.length > 1 })
+      }
+    }
+  }
+  const responses = await batchedRequests(
+    chainId,
+    pages.map((page) => ({
+      method: 'eth_call',
+      params: [
+        {
+          to: page.aggregate ? MULTICALL3_ADDRESS : page.calls[0].address,
+          data: page.aggregate ? encodeMulticall(page.calls) : page.calls[0].data
+        },
+        blockTag(page.calls[0].blockNumber)
+      ]
+    }))
+  )
+  const results = new Map<string, Hash | null>()
+  pages.forEach((page, index) => {
+    const value = hexData(responses[index]?.result)
+    if (!page.aggregate) {
+      results.set(page.calls[0].key, value)
+      return
+    }
+    // Do not fan an upstream failure out into dozens of paid fallback calls.
+    if (value === null) throw new ArchiveRpcUpstreamError('Multicall3 request failed')
+    let decoded: (Hash | null)[]
+    try {
+      decoded = decodeMulticall(value, page.calls.length)
+    } catch {
+      throw new ArchiveRpcUpstreamError('Invalid Multicall3 response')
+    }
+    page.calls.forEach((call, i) => {
+      results.set(call.key, decoded[i])
+    })
+  })
+  return results
 }
 
 export async function readBlockTimestamps(
@@ -484,19 +552,27 @@ export async function readVaultMetadata(
   vaultAddress: Address,
   blockNumber: number
 ): Promise<VaultAllocationVault> {
-  const vaultResults = await readContractCalls(chainId, [
-    { key: 'name', address: vaultAddress, data: SELECTOR.name, blockNumber },
-    { key: 'symbol', address: vaultAddress, data: SELECTOR.symbol, blockNumber },
-    { key: 'asset', address: vaultAddress, data: SELECTOR.asset, blockNumber }
-  ])
+  const vaultResults = await readContractCalls(
+    chainId,
+    [
+      { key: 'name', address: vaultAddress, data: SELECTOR.name, blockNumber },
+      { key: 'symbol', address: vaultAddress, data: SELECTOR.symbol, blockNumber },
+      { key: 'asset', address: vaultAddress, data: SELECTOR.asset, blockNumber }
+    ],
+    { multicall: true }
+  )
   const assetAddress = decodeAddress(vaultResults.get('asset') ?? null)
   let assetSymbol: string | null = null
   let assetDecimals: number | null = null
   if (assetAddress) {
-    const assetResults = await readContractCalls(chainId, [
-      { key: 'symbol', address: assetAddress, data: SELECTOR.symbol, blockNumber },
-      { key: 'decimals', address: assetAddress, data: SELECTOR.decimals, blockNumber }
-    ])
+    const assetResults = await readContractCalls(
+      chainId,
+      [
+        { key: 'symbol', address: assetAddress, data: SELECTOR.symbol, blockNumber },
+        { key: 'decimals', address: assetAddress, data: SELECTOR.decimals, blockNumber }
+      ],
+      { multicall: true }
+    )
     assetSymbol = decodeString(assetResults.get('symbol') ?? null)
     const decimals = decodeUint(assetResults.get('decimals') ?? null)
     assetDecimals = decimals !== null && decimals <= 255n ? Number(decimals) : null
@@ -525,7 +601,8 @@ export async function readContractNames(
       address: contractAddress,
       data: SELECTOR.name,
       blockNumber
-    }))
+    })),
+    { multicall: true }
   )
   return new Map(unique.map((contractAddress) => [contractAddress, decodeString(results.get(contractAddress) ?? null)]))
 }

@@ -185,7 +185,7 @@ export async function materializeStates(input: {
     }
     return blockCalls
   })
-  const results = await readContractCalls(input.chainId, calls)
+  const results = await readContractCalls(input.chainId, calls, { multicall: true })
   const checkpoints = new Map(input.checkpoints?.map((checkpoint) => [checkpoint.blockNumber, checkpoint]) ?? [])
   const states = input.blocks.map((block): AllocationState => {
     const totalAssets = decodeUint(results.get(key(block.blockNumber, 'totalAssets')) ?? null)
