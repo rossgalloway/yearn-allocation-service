@@ -1,5 +1,5 @@
 import type { VaultAccountingCheckpoint } from '@/lib/envio/types'
-import { blockEndPosition, resolveAllocatorAssignment } from './allocators'
+import { allocatorAssignmentEvents, blockEndPosition, resolveAllocatorAssignment } from './allocators'
 import {
   ArchiveRpcUpstreamError,
   allocatorConfigurationCall,
@@ -115,12 +115,13 @@ export async function materializeStates(input: {
     input.vaultAddress,
     input.blocks.map((block) => block.blockNumber)
   )
+  const assignments = allocatorAssignmentEvents(input.events)
   const resolutions = new Map(
     input.blocks.map((block) => [
       block.blockNumber,
       resolveAllocatorAssignment({
         vaultAddress: input.vaultAddress,
-        events: input.events,
+        events: assignments,
         at: blockEndPosition(block.blockNumber),
         roleManagerAddress: managers.get(block.blockNumber) ?? null,
         deployments: input.deployments
@@ -187,6 +188,7 @@ export async function materializeStates(input: {
   })
   const results = await readContractCalls(input.chainId, calls, { multicall: true })
   const checkpoints = new Map(input.checkpoints?.map((checkpoint) => [checkpoint.blockNumber, checkpoint]) ?? [])
+  const eventsByBlock = Map.groupBy(input.events, (event) => event.blockNumber)
   const states = input.blocks.map((block): AllocationState => {
     const totalAssets = decodeUint(results.get(key(block.blockNumber, 'totalAssets')) ?? null)
     const indexedTotalDebt = decodeUint(results.get(key(block.blockNumber, 'totalDebt')) ?? null)
@@ -234,7 +236,7 @@ export async function materializeStates(input: {
       .sort((left, right) => left.strategyAddress.localeCompare(right.strategyAddress))
 
     const totalDebt = indexedTotalDebt
-    const blockEvents = input.events.filter((event) => event.blockNumber === block.blockNumber)
+    const blockEvents = eventsByBlock.get(block.blockNumber) ?? []
     const unallocated = indexedUnallocated(checkpoints.get(block.blockNumber), totalAssets, totalDebt, totalIdle)
     return {
       id: `allocation-state:${input.chainId}:${input.vaultAddress.toLowerCase()}:${block.blockNumber}`,

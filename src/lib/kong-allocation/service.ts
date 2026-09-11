@@ -13,7 +13,7 @@ import type {
   VaultAccountingCheckpointFailure,
   VaultAllocationCoverage
 } from '@/lib/envio/types'
-import { resolveAllocatorAssignment } from './allocators'
+import { allocatorAssignmentEvents, resolveAllocatorAssignment } from './allocators'
 import { buildTransitions, type TransitionPoint } from './classify'
 import { AllocationHistoryCursorError } from './cursor'
 import { processDoa } from './doa'
@@ -136,6 +136,7 @@ function triggerReplayInputs(
   deployments: readonly AllocatorDeploymentEvidence[]
 ): AllocatorTriggerReplayInput[] {
   const statesByBlock = new Map(states.map((state) => [state.blockNumber, state]))
+  const assignments = allocatorAssignmentEvents(allEvents)
   const seen = new Set<string>()
   return selectedEvents.flatMap((event): AllocatorTriggerReplayInput[] => {
     if (event.eventName !== 'DebtUpdated' || !event.strategyAddress) return []
@@ -144,7 +145,7 @@ function triggerReplayInputs(
     const before = statesByBlock.get(event.blockNumber - 1)?.allocatorResolution
     const resolution = resolveAllocatorAssignment({
       vaultAddress,
-      events: allEvents,
+      events: assignments,
       at: event,
       roleManagerAddress: before?.roleManagerAddress ?? null,
       deployments

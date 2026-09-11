@@ -341,18 +341,21 @@ export async function readTransactionContexts(
   vaultAddress: Address
 ): Promise<Map<Hash, RpcTransactionContext>> {
   const unique = [...new Set(transactionHashes)]
-  const [responses, traces] = await Promise.all([
-    batchedRequests(
-      chainId,
-      unique.map((transactionHash) => ({ method: 'eth_getTransactionByHash', params: [transactionHash] }))
-    ),
-    batchedRequests(
-      chainId,
-      unique.map((transactionHash) => ({ method: 'trace_transaction', params: [transactionHash] }))
-    )
-  ])
-  return new Map(
-    unique.map((transactionHash, index) => {
+  const contexts = new Map<Hash, RpcTransactionContext>()
+  // Reduce each page before loading the next: raw traces can dwarf the derived contexts.
+  for (let start = 0; start < unique.length; start += RPC_BATCH_SIZE) {
+    const page = unique.slice(start, start + RPC_BATCH_SIZE)
+    const [responses, traces] = await Promise.all([
+      batchedRequests(
+        chainId,
+        page.map((transactionHash) => ({ method: 'eth_getTransactionByHash', params: [transactionHash] }))
+      ),
+      batchedRequests(
+        chainId,
+        page.map((transactionHash) => ({ method: 'trace_transaction', params: [transactionHash] }))
+      )
+    ])
+    page.forEach((transactionHash, index) => {
       const value = responses[index]?.result as { from?: unknown; to?: unknown; input?: unknown } | null | undefined
       const from =
         typeof value?.from === 'string' && /^0x[a-fA-F0-9]{40}$/.test(value.from)
@@ -367,9 +370,10 @@ export async function readTransactionContexts(
           ? (value.input.slice(0, 10).toLowerCase() as Hash)
           : null
       const trace = traceContext(traces[index]?.result, vaultAddress)
-      return [transactionHash, { from, to, inputSelector, ...trace }]
+      contexts.set(transactionHash, { from, to, inputSelector, ...trace })
     })
-  )
+  }
+  return contexts
 }
 
 interface TraceCall {

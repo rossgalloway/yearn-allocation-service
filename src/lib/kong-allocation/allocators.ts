@@ -26,6 +26,13 @@ export function blockEndPosition(blockNumber: number): AllocationPosition {
   return { blockNumber, transactionIndex: Number.MAX_SAFE_INTEGER, logIndex: Number.MAX_SAFE_INTEGER, id: '\uffff' }
 }
 
+// Select once per phase; only assignment and role-manager changes affect this resolution.
+export function allocatorAssignmentEvents(events: readonly AllocationSourceEvent[]): AllocationSourceEvent[] {
+  return events.filter((event) =>
+    ['UpdateRoleManager', 'AddedNewVault', 'UpdateDebtAllocator', 'RemovedVault'].includes(event.eventName)
+  )
+}
+
 export function resolveAllocatorAssignment(input: {
   vaultAddress: Address
   events: readonly AllocationSourceEvent[]

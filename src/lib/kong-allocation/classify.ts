@@ -1,4 +1,4 @@
-import { resolveAllocatorAssignment } from './allocators'
+import { allocatorAssignmentEvents, resolveAllocatorAssignment } from './allocators'
 import { knownDoaKeeper } from './known-actors'
 import type {
   ActorClassification,
@@ -120,6 +120,7 @@ function actorByTransaction(
     vaultRoles: new Map()
   }
   const actors = new Map<Hash, TransactionActorContext>()
+  const assignments = allocatorAssignmentEvents(events)
   const sorted = [...events].sort(eventOrder)
   let index = 0
   while (index < sorted.length) {
@@ -140,7 +141,7 @@ function actorByTransaction(
     const immediateVaultCaller = context?.immediateVaultCaller ?? null
     const assignment = resolveAllocatorAssignment({
       vaultAddress,
-      events,
+      events: assignments,
       at: transactionEvents[0],
       roleManagerAddress: state.roleManager
     })
@@ -278,9 +279,10 @@ export function buildTransitions(input: {
     input.vaultAddress,
     input.transactionContexts ?? new Map()
   )
+  const eventsByBlock = Map.groupBy(input.events, (event) => event.blockNumber)
   return input.points.map((point) => {
     const isLiveTail = point.currentLiveTail === true
-    const blockEvents = input.events.filter((event) => event.blockNumber === point.blockNumber)
+    const blockEvents = eventsByBlock.get(point.blockNumber) ?? []
     const effects = isLiveTail ? [] : transactionEffects(blockEvents, actors, input.triggerReplays ?? new Map())
     const transactionHashes = [...new Set(effects.map((effect) => effect.transactionHash))]
     return {

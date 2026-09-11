@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { blockEndPosition, resolveAllocatorAssignment, ZERO_ADDRESS } from './allocators'
+import { allocatorAssignmentEvents, blockEndPosition, resolveAllocatorAssignment, ZERO_ADDRESS } from './allocators'
 import type { Address, AllocationSourceEvent, AllocatorDeploymentEvidence } from './types'
 
 const addr = (n: number) => `0x${n.toString(16).padStart(40, '0')}` as Address
@@ -116,4 +116,19 @@ describe('allocator assignments', () => {
       ).toMatchObject({ address: shared, family: 'shared', support: 'supported' })
     }
   })
+})
+
+it('preserves assignment resolution when unrelated event history is removed', () => {
+  const events = [
+    event('AddedNewVault', old, 9),
+    event('DebtUpdated', custom, 10, 1),
+    event('NewDebtAllocator', shared, 10, 2),
+    event('UpdateDebtAllocator', shared, 10, 4),
+    event('UpdateRoleManager', custom, 11, 1, vault),
+    { ...event('UpdateRoleManager', custom, 12, 1, vault), args: { roleManager: replacementManager, vault } },
+    event('AddedNewVault', custom, 12, 2, replacementManager),
+    event('RemovedVault', custom, 13, 1, replacementManager)
+  ]
+  const selected = allocatorAssignmentEvents(events)
+  for (const block of [8, 9, 10, 11, 12, 13, 14]) expect(resolve(selected, block)).toEqual(resolve(events, block))
 })
