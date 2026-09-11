@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-09-10T21:17:24.582Z",
+  "vault": "yvvbUSDS",
+  "block": 42324152,
+  "entryCount": 7,
+  "entriesEqual": true,
+  "entryHash": "c6731e51924db4f338043fc34b5d7d98accdd691a943efea0cfcd75b1f33170b",
+  "reused": {
+    "rpcHits": 25,
+    "rpcMisses": 0,
+    "rpcMethods": 3,
+    "statesReused": 10,
+    "statesBuilt": 2
+  },
+  "forcedStateRebuild": {
+    "rpcHits": 75,
+    "rpcMisses": 0,
+    "rpcMethods": 3,
+    "statesReused": 0,
+    "statesBuilt": 12
+  }
+}

@@ -4,10 +4,7 @@
     {
       "chainId": 1,
       "vault": "yBOLD",
-      "blocks": [
-        22597751,
-        22597752
-      ],
+      "blocks": [22597751, 22597752],
       "reads": 12,
       "equal": true,
       "direct": {
@@ -21,10 +18,7 @@
     {
       "chainId": 8453,
       "vault": "TYD",
-      "blocks": [
-        32384530,
-        32384531
-      ],
+      "blocks": [32384530, 32384531],
       "reads": 12,
       "equal": true,
       "direct": {
@@ -38,10 +32,7 @@
     {
       "chainId": 747474,
       "vault": "yvAUSD",
-      "blocks": [
-        4905459,
-        4905460
-      ],
+      "blocks": [4905459, 4905460],
       "reads": 12,
       "equal": true,
       "direct": {

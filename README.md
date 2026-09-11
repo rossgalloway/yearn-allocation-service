@@ -154,9 +154,9 @@ strict.
 
 The materializer stores both the full evidence payload and the compact chart payload, so chart requests do not load and trim
 the larger JSON at request time. See [docs/database.md](./docs/database.md) for migrations, backfill, refresh, verification,
-and cutover. The current refresh
-implementation intentionally performs a complete rebuild into a new immutable run. It does not yet implement incremental tail
-updates or a bounded old-run retention policy; those remain Kong production decisions.
+and cutover. Refreshes reuse successful finalized RPC results and unchanged historical allocation states. They re-scan
+Envio for corrected evidence and assemble a new immutable public projection so grouping and proposal updates remain correct.
+Append-only publication and bounded old-run retention remain separate production decisions.
 
 ## Local development
 
@@ -200,3 +200,16 @@ Allocator assignments come from Envio `AddedNewVault` and `UpdateDebtAllocator` 
 Ethereum (1), Base (8453), and Katana (747474) are supported through `ALLOCATION_VAULTS_JSON`, an explicit array of `{chainId,address,label}` objects. Configure each selected chain's `RPC_URL_<chainId>` and obtain per-vault immutable coverage before backfilling. The three existing Ethereum samples remain the default. `--chain=<chainId>` selects a chain for the materialization script.
 
 Run migrations before rematerializing: migration 0004 retains allocator evidence with each run. The materializer version changed to `allocation-history-v2-allocator-assignment`; earlier runs must be rebuilt. This requires the local follow-up to Envio PR #58 described in [the implementation notes](docs/envio-pr58-follow-up.md). Envio schema availability and deterministic fixture tests are not proof of complete production replay or certified history on any chain.
+
+
+### Historical read efficiency
+
+Background materializations use Multicall3 for compatible same-block getters and a persistent Postgres cache for finalized
+reads, bytecode, transactions, and traces. Derived states are reused when their canonical block and input evidence agree;
+late evidence invalidates the affected states. Finalized and indexed heads bound every background run. See the
+[cache runbook](docs/database.md#persistent-finalized-evidence-and-incremental-states) for failure behavior, validation controls,
+and per-run counters. Database-backed API requests do not make RPC calls.
+
+The local provisional preview currently enrolls the 21-vault manifest in `docs/coverage-review/proposed-vaults.json`
+(13 Ethereum, 2 Base, 6 Katana). See [the coverage review](docs/coverage-review/README.md) for the inventory, cache
+measurements, and per-vault API validation. Refreshes remain manual.

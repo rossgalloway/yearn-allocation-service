@@ -1,0 +1,27 @@
+{
+  "vault": "yBOLD",
+  "coldRunId": "83",
+  "warmRunId": "85",
+  "cold": {
+    "rpcHits": 3,
+    "rpcMisses": 296563,
+    "rpcMethods": 121836,
+    "statesReused": 0,
+    "statesBuilt": 20157
+  },
+  "warm": {
+    "rpcHits": 23931,
+    "rpcMisses": 29,
+    "rpcMethods": 10,
+    "statesReused": 19884,
+    "statesBuilt": 273
+  },
+  "entries": 1523,
+  "coldHead": 25949018,
+  "warmHead": 25949050,
+  "note": "Heads differ; this is a warm refresh workload measurement, not fixed-head output parity. Cold counter predates inclusion of two finality-anchor methods. Warm counter includes three identity/finality methods. RPC methods are not provider billing units.",
+  "historicalEntryComparison": {
+    "compared": 1522,
+    "changed": 0
+  }
+}
