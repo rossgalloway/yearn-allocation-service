@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildStrategyDirectory, eventBlocks, orderByDirection } from './service'
+import { buildStrategyDirectory, eventBlocks, firstVaultEventBlock, orderByDirection } from './service'
 import type { Address, AllocationSourceEvent, AllocationState, Hash } from './types'
 
 const active = '0x00000000000000000000000000000000000000aa' as Address
@@ -100,5 +100,14 @@ describe('Kong allocation timeline helpers', () => {
 
     expect(eventBlocks(events)).toEqual([{ blockNumber: 100, blockTimestamp: 1000 }])
     expect(eventBlocks(events, 0)).toEqual([])
+  })
+})
+
+describe('vault history start', () => {
+  it('retains allocator evidence without taking vault snapshots before creation', () => {
+    const shared = { sourceAddress: inactive, vaultAddress: null, blockNumber: 50 } as AllocationSourceEvent
+    const creation = { sourceAddress: active, vaultAddress: active, blockNumber: 100 } as AllocationSourceEvent
+    expect(firstVaultEventBlock([shared, creation], active, 200)).toBe(100)
+    expect(firstVaultEventBlock([shared], active, 200)).toBe(200)
   })
 })

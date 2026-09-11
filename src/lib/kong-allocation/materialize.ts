@@ -1,5 +1,6 @@
 import type { VaultAccountingCheckpoint } from '@/lib/envio/types'
 import { allocatorAssignmentEvents, blockEndPosition, resolveAllocatorAssignment } from './allocators'
+import { evidenceHash, historicalCache } from './historical-cache'
 import {
   ArchiveRpcUpstreamError,
   allocatorConfigurationCall,
@@ -101,7 +102,7 @@ export interface MaterializedStates {
   strategyAddresses: Address[]
 }
 
-export async function materializeStates(input: {
+async function buildMaterializedStates(input: {
   chainId: number
   vaultAddress: Address
   blocks: readonly StateBlock[]
@@ -257,5 +258,89 @@ export async function materializeStates(input: {
   return {
     states,
     strategyAddresses: strategies.map((strategy) => strategy.address).sort()
+  }
+}
+
+// Reuse derived historical states only when both chain identity and all prior
+// allocator/vault evidence agree. Late or corrected events invalidate the suffix.
+export function stateEvidenceKeys(input: Parameters<typeof buildMaterializedStates>[0]): Map<number, string> {
+  const events = [...input.events].sort(
+    (a, b) =>
+      a.blockNumber - b.blockNumber ||
+      a.transactionIndex - b.transactionIndex ||
+      a.logIndex - b.logIndex ||
+      a.id.localeCompare(b.id)
+  )
+  const keys = new Map<number, string>()
+  let cursor = 0
+  let prefix = evidenceHash(['allocation-state-v1', input.chainId, input.vaultAddress.toLowerCase()])
+  for (const block of [...input.blocks].sort((a, b) => a.blockNumber - b.blockNumber)) {
+    while (cursor < events.length && events[cursor].blockNumber <= block.blockNumber) {
+      prefix = evidenceHash([prefix, events[cursor]])
+      cursor++
+    }
+    keys.set(
+      block.blockNumber,
+      evidenceHash([
+        prefix,
+        block,
+        (input.deployments ?? [])
+          .filter((d) => d.createdBlock <= block.blockNumber)
+          .sort((a, b) => a.sourceEventId.localeCompare(b.sourceEventId)),
+        (input.checkpoints ?? []).filter((c) => c.blockNumber === block.blockNumber)
+      ])
+    )
+  }
+  return keys
+}
+
+export async function materializeStates(
+  input: Parameters<typeof buildMaterializedStates>[0]
+): Promise<MaterializedStates> {
+  const cache = historicalCache()
+  if (!cache || cache.chainId !== input.chainId) return buildMaterializedStates(input)
+  await cache.ensureBlocks(input.blocks.map((b) => b.blockNumber))
+  const fingerprints = stateEvidenceKeys(input)
+  const identities = input.blocks.map((block) => {
+    const canonical = cache.blocks.get(block.blockNumber)
+    return canonical
+      ? { block, canonical, key: cache.key('state-v1', canonical, fingerprints.get(block.blockNumber)) }
+      : null
+  })
+  const found =
+    process.env.ALLOCATION_FORCE_STATE_REBUILD === 'true'
+      ? new Map<string, unknown>()
+      : await cache.get(identities.flatMap((x) => (x ? [x.key] : [])))
+  const missing = input.blocks.filter((_, i) => {
+    const identity = identities[i]
+    return !identity || !found.has(identity.key)
+  })
+  const built = await buildMaterializedStates({ ...input, blocks: missing })
+  cache.stats.statesReused += input.blocks.length - missing.length
+  cache.stats.statesBuilt += missing.length
+  const byBlock = new Map(built.states.map((state) => [state.blockNumber, state]))
+  const writes = []
+  for (const identity of identities) {
+    if (!identity) continue
+    const state = byBlock.get(identity.block.blockNumber)
+    if (!state) continue
+    // Transient RPC/configuration failures must be retried, never fossilized.
+    if (state.totalIdle === null || state.allocatorResolution?.support === 'unavailable') continue
+    if (BigInt(state.totalAssets) !== BigInt(state.totalDebt) + BigInt(state.totalIdle)) continue
+    if (state.strategies.reduce((sum, s) => sum + BigInt(s.currentDebt), 0n) !== BigInt(state.totalDebt)) continue
+    writes.push({ key: identity.key, block: identity.canonical, namespace: 'state-v1', payload: state })
+  }
+  await cache.put(writes)
+  return {
+    states: input.blocks.map((block, i) => {
+      const identity = identities[i]
+      const state =
+        byBlock.get(block.blockNumber) ?? (identity ? (found.get(identity.key) as AllocationState) : undefined)
+      if (!state) throw new Error('Missing materialized historical state')
+      return state
+    }),
+    strategyAddresses: strategyReferences(input.events)
+      .map((s) => s.address)
+      .sort()
   }
 }

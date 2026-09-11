@@ -4,6 +4,7 @@ import { DoaConfigurationError, DoaUpstreamError, readDoaOptimizations } from '@
 import { selectVaultDoaOptimizations } from '@/lib/doa/overlay'
 import {
   EnvioUpstreamError,
+  envioGraphqlRequest,
   fetchAccountingCheckpoints,
   fetchAllocationCoverage,
   fetchUnresolvedCheckpointFailures
@@ -18,6 +19,7 @@ import { buildTransitions, type TransitionPoint } from './classify'
 import { AllocationHistoryCursorError } from './cursor'
 import { processDoa } from './doa'
 import { fetchCompleteKongAllocationEvents, fetchKongAllocationEvents, isAllocationTransitionEvent } from './envio'
+import { historicalCache } from './historical-cache'
 import { materializeStates, type StateBlock } from './materialize'
 import {
   readMaterializedAllocationChart,
@@ -80,6 +82,21 @@ export function eventBlocks(events: readonly AllocationSourceEvent[], limit?: nu
     .map(([blockNumber, blockTimestamp]) => ({ blockNumber, blockTimestamp }))
   if (limit === undefined) return blocks
   return limit === 0 ? [] : blocks.slice(-limit)
+}
+
+export function firstVaultEventBlock(
+  events: readonly AllocationSourceEvent[],
+  vault: Address,
+  fallback: number
+): number {
+  return events.reduce(
+    (start, event) =>
+      event.sourceAddress.toLowerCase() === vault.toLowerCase() ||
+      event.vaultAddress?.toLowerCase() === vault.toLowerCase()
+        ? Math.min(start, event.blockNumber)
+        : start,
+    fallback
+  )
 }
 
 async function pairedStateBlocks(
@@ -319,7 +336,30 @@ async function materializationHead(
   safeBlock: EventBlock
   limitations: string[]
 }> {
-  const rpcSafeBlock = await readLatestSafeBlock(vault.chainId)
+  let rpcSafeBlock = await readLatestSafeBlock(vault.chainId)
+  if (historicalCache()) {
+    const progress = await envioGraphqlRequest<{ chain_metadata: { latest_processed_block: number }[] }>(
+      'query AllocationProgress($chainId:Int!){chain_metadata(where:{chain_id:{_eq:$chainId}}){latest_processed_block}}',
+      { chainId: vault.chainId }
+    )
+    const processed = progress.chain_metadata?.[0]?.latest_processed_block
+    if (!Number.isSafeInteger(processed) || processed < 0)
+      throw new AllocationCoverageError('Envio indexed progress is unavailable')
+    if (processed < rpcSafeBlock.blockNumber)
+      rpcSafeBlock = {
+        blockNumber: processed,
+        blockTimestamp: (await readBlockTimestamps(vault.chainId, [processed])).get(processed) as number
+      }
+  }
+  const pinned = process.env.ALLOCATION_MATERIALIZATION_TO_BLOCK
+  if (historicalCache() && pinned !== undefined) {
+    if (!/^\d+$/.test(pinned) || !Number.isSafeInteger(Number(pinned)) || Number(pinned) > rpcSafeBlock.blockNumber)
+      throw new AllocationCoverageError('Invalid materialization block cap')
+    rpcSafeBlock = {
+      blockNumber: Number(pinned),
+      blockTimestamp: (await readBlockTimestamps(vault.chainId, [Number(pinned)])).get(Number(pinned)) as number
+    }
+  }
   let coverage: VaultAllocationCoverage | null = null
   try {
     coverage = await fetchAllocationCoverage({
@@ -473,7 +513,12 @@ export async function materializeCompleteKongAllocationHistory(
     limitations.push(`Envio has ${checkpointResult.failures.length} unresolved checkpoint failures in this range`)
   }
   const materializationLimitations = uniqueLimitations(limitations)
-  const transitionBlocks = eventBlocks(eventBatch.events).filter((block) => block.blockNumber >= range.fromBlock)
+  // Shared allocator control evidence may predate this vault. Keep it as input,
+  // but never request a vault snapshot before its first vault-scoped event.
+  const vaultEventStart = firstVaultEventBlock(eventBatch.events, vault.address, safeBlock.blockNumber)
+  const transitionBlocks = eventBlocks(eventBatch.events).filter(
+    (block) => block.blockNumber >= Math.max(range.fromBlock, vaultEventStart)
+  )
   const firstTransitionBlock = transitionBlocks[0]?.blockNumber ?? safeBlock.blockNumber
   const coverageStartBlock = head.coverage.safeForTimeline
     ? head.coverage.coverageStartBlock
@@ -494,6 +539,9 @@ export async function materializeCompleteKongAllocationHistory(
         }
 
   const transitionBlockNumbers = new Set(transitionBlocks.map((block) => block.blockNumber))
+  await historicalCache()?.registerEvents(
+    eventBatch.events.filter((event) => transitionBlockNumbers.has(event.blockNumber))
+  )
   const blocks = await pairedStateBlocks(vault.chainId, transitionBlocks, safeBlock, coverage.coverageStartBlock)
   const transactionContexts = await readTransactionContexts(
     vault.chainId,

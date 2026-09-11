@@ -1,3 +1,4 @@
+import { historicalCache, withHistoricalCache } from './historical-cache'
 import {
   decodeMulticall,
   encodeMulticall,
@@ -117,11 +118,13 @@ async function rpcBatch(chainId: number, requests: RpcRequest[]): Promise<Map<nu
   return new Map((payload as RpcResponse[]).map((item) => [item.id, item]))
 }
 
-async function batchedRequests(
+async function rawBatchedRequests(
   chainId: number,
   requests: Omit<RpcRequest, 'jsonrpc' | 'id'>[]
 ): Promise<RpcResponse[]> {
   const responses: RpcResponse[] = []
+  const cache = historicalCache()
+  if (cache) cache.stats.rpcMethods += requests.length
   for (let start = 0; start < requests.length; start += RPC_BATCH_SIZE) {
     const page = requests.slice(start, start + RPC_BATCH_SIZE)
     const encoded = page.map(
@@ -137,6 +140,21 @@ async function batchedRequests(
     }
   }
   return responses
+}
+
+async function batchedRequests(
+  chainId: number,
+  requests: Omit<RpcRequest, 'jsonrpc' | 'id'>[]
+): Promise<RpcResponse[]> {
+  const cache = historicalCache()
+  // eth_call caching happens before aggregation, so successful subcalls are independently reusable.
+  if (!cache || cache.chainId !== chainId || requests.some((r) => r.method === 'eth_call'))
+    return rawBatchedRequests(chainId, requests)
+  return cache.execute(requests, (missing) => rawBatchedRequests(chainId, missing))
+}
+
+export async function withCachedHistoricalReads<T>(chainId: number, work: () => Promise<T>) {
+  return withHistoricalCache(chainId, (requests) => rawBatchedRequests(chainId, requests), work)
 }
 
 function blockTag(blockNumber: number): Hash {
@@ -233,6 +251,30 @@ export async function readContractCalls(
   calls: readonly ContractCall[],
   options: { multicall?: boolean } = {}
 ): Promise<Map<string, Hash | null>> {
+  const cache = historicalCache()
+  if (!cache || cache.chainId !== chainId) return readUncachedContractCalls(chainId, calls, options)
+  const requests = calls.map((call) => ({
+    method: 'eth_call',
+    params: [{ to: call.address.toLowerCase(), data: call.data.toLowerCase() }, blockTag(call.blockNumber)]
+  }))
+  const responses = await cache.execute(requests, async (missing) => {
+    const selected = missing.map((r, i) => ({
+      key: String(i),
+      address: (r.params[0] as { to: Address }).to,
+      data: (r.params[0] as { data: Hash }).data,
+      blockNumber: Number(r.params[1])
+    }))
+    const values = await readUncachedContractCalls(chainId, selected, options)
+    return selected.map((call, i) => ({ id: i + 1, result: values.get(call.key) }))
+  })
+  return new Map(calls.map((call, i) => [call.key, hexData(responses[i]?.result)]))
+}
+
+async function readUncachedContractCalls(
+  chainId: number,
+  calls: readonly ContractCall[],
+  options: { multicall?: boolean } = {}
+): Promise<Map<string, Hash | null>> {
   if (calls.length === 0) return new Map()
   // Opt-in only: Multicall changes msg.sender and must not wrap trigger replay.
   const groups = new Map<number, ContractCall[]>()
@@ -309,6 +351,18 @@ export async function readBlockTimestamps(
   blockNumbers: readonly number[]
 ): Promise<Map<number, number>> {
   const unique = [...new Set(blockNumbers)]
+  const cache = historicalCache()
+  if (cache && cache.chainId === chainId) {
+    await cache.ensureBlocks(unique)
+    if (unique.every((n) => cache.blocks.has(n)))
+      return new Map(
+        unique.map((n) => {
+          const block = cache.blocks.get(n)
+          if (!block) throw new Error('Missing finalized block')
+          return [n, block.timestamp]
+        })
+      )
+  }
   const responses = await batchedRequests(
     chainId,
     unique.map((blockNumber) => ({ method: 'eth_getBlockByNumber', params: [blockTag(blockNumber), false] }))
@@ -324,6 +378,9 @@ export async function readBlockTimestamps(
 }
 
 export async function readLatestSafeBlock(chainId: number): Promise<{ blockNumber: number; blockTimestamp: number }> {
+  const cache = historicalCache()
+  if (cache && cache.chainId === chainId)
+    return { blockNumber: cache.finalized.number, blockTimestamp: cache.finalized.timestamp }
   const [latestResponse] = await batchedRequests(chainId, [{ method: 'eth_blockNumber', params: [] }])
   const latestHex = hexData(latestResponse?.result)
   if (!latestHex) throw new ArchiveRpcUpstreamError('Archive RPC did not return the latest block number')

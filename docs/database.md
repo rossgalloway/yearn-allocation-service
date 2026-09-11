@@ -89,8 +89,9 @@ The archive provider must support historical `eth_call` and `trace_transaction` 
 bun run allocation:refresh
 ```
 
-For this test service, `refresh` is a full replay from the selected coverage boundary into a new immutable run. It is deliberately
-correct before it is incremental: no partial run is visible, and a failed run cannot replace the last good one. A running job
+Refresh re-reads Envio evidence to detect late or corrected history, but reuses finalized RPC results and unchanged derived
+allocation states. Only missing or invalidated states are reconstructed. It creates a new immutable public projection;
+no partial run is visible, and a failed run cannot replace the last good one. A running job
 blocks another job for the same vault. Runs older than `ALLOCATION_STALE_RUN_SECONDS` (six hours by default) are treated as
 interrupted and replaced on the next attempt.
 
@@ -136,6 +137,47 @@ reads: 12 `eth_call` methods became two aggregate `eth_call` methods plus two `e
 See `docs/coverage-review/multicall-validation.json`. These are RPC method counts, not measured provider charges.
 JSON-RPC transport batching still limits each HTTP batch to 100 methods.
 
-This change does not introduce a persistent historical RPC cache or incremental materialization. Avoid frequent full
-refreshes until recurring workload and provider billing units have been measured. Public database-backed requests continue
+Persistent finalized caching and incremental state reuse are described below. Measure recurring workload and provider billing
+units before selecting a refresh frequency. Public database-backed requests continue
 to make no RPC calls. No rematerialization is required solely for this transport change; the next scheduled/manual run uses it.
+
+
+## Persistent finalized evidence and incremental states
+
+Migration 0005 adds canonical finalized block identities and a shared historical cache. The background CLI enables this
+cache automatically. It checks the provider chain ID and explicit finalized head, and verifies the previously saved anchor
+before trusting cached history. A changed finalized hash or regressed finalized head stops the run. Snapshot heads are also
+capped to Envio's `latest_processed_block`.
+
+Successful `eth_call` subresults, bytecode, mined transactions, and identity-checked transaction traces are cached by chain,
+block hash, method, and parameters. Multicall assembles only missing getters. Errors and null responses are not cached;
+zero and successful empty bytecode remain valid values. Trace responses without matching block/transaction identities
+are not reusable. The cache is shared across vaults and survives failed jobs and process restarts.
+
+Derived states are keyed by canonical block hash, state granularity, a cumulative fingerprint of earlier event evidence,
+relevant allocator deployments, and the same-block checkpoint. Appended events leave the historical prefix reusable;
+late/corrected events invalidate the affected suffix. States with unavailable enrichment or failed accounting reconciliation
+are not saved for reuse. `ALLOCATION_FORCE_STATE_REBUILD=true` bypasses derived-state reuse for comparisons while retaining
+RPC caching. `ALLOCATION_MATERIALIZATION_TO_BLOCK=<number>` pins a validation run below both finalized and indexed heads.
+
+Per-vault CLI logs report `rpcHits`, `rpcMisses`, `rpcMethods`, `statesReused`, and `statesBuilt`. Method counts include chain
+identity/finality checks; they are not provider billing units. Failed jobs preserve the active public run.
+
+This is incremental historical enrichment, not append-only publication: Envio history is still scanned for corrections,
+and grouping, proposal enrichment, interval checks, and public entry serialization are recomputed from the combined states.
+Those local projection operations are needed to preserve cross-boundary groups and reflect updated proposal evidence.
+No automatic scheduler or cache-retention deletion is introduced here. The canonical-block/cache schema is versioned in code;
+semantic changes must bump the relevant namespace before reuse.
+
+The package backfill/refresh commands use Bun's lower-memory mode (`--smol`). For a large first enrollment, run one
+`--vault=<label>` per process sequentially; the persistent cache is shared between processes. The initial 21-vault rollout
+exposed substantial raw-trace memory use. Transaction contexts now reduce traces in pages of 100, and remaining cold runs
+were resumed in fresh processes. Avoid
+parallel cold backfills on a memory-constrained host.
+
+Assignment resolution receives only the four assignment/role-manager event types, selected once per processing phase.
+This avoids repeatedly sorting accounting and control history for each block and transaction. The full source history
+still participates in state fingerprints and public activity classification.
+
+State construction and transition classification also group events by block once, preserving event order while avoiding
+a full event scan for every snapshot.

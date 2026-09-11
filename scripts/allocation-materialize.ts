@@ -5,6 +5,7 @@ import {
   failMaterializationRun,
   startMaterializationRun
 } from '@/lib/kong-allocation/repository'
+import { withCachedHistoricalReads } from '@/lib/kong-allocation/rpc'
 import { materializeCompleteKongAllocationHistory } from '@/lib/kong-allocation/service'
 import { listTestVaults } from '@/lib/kong-allocation/vaults'
 
@@ -34,7 +35,10 @@ try {
     try {
       run = await startMaterializationRun({ vault, mode })
       console.log(`${mode === 'backfill' ? 'Backfilling' : 'Refreshing'} ${vault.label}`)
-      const result = await materializeCompleteKongAllocationHistory(vault)
+      const { result, stats } = await withCachedHistoricalReads(vault.chainId, () =>
+        materializeCompleteKongAllocationHistory(vault)
+      )
+      console.log(`${vault.label}: ${JSON.stringify(stats)}`)
       await completeMaterializationRun({ run, ...result })
       console.log(
         `${vault.label}: activated ${result.coverage.safeForTimeline ? 'certified' : 'PROVISIONAL'} run ${run.id} with ${result.entries.length} entries through block ${result.safeBlock.blockNumber}`

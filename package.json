@@ -15,7 +15,7 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test": "vitest run",
-    "test:db": "vitest run src/lib/kong-allocation/repository.integration.test.ts",
+    "test:db": "vitest run src/lib/kong-allocation/repository.integration.test.ts src/lib/kong-allocation/historical-cache.integration.test.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
