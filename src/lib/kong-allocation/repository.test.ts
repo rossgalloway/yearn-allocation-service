@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { DatabaseQueryable } from '@/lib/database/client'
 import { buildAllocationChartPayload } from './chart'
 import { buildAllocationFlowIntervals } from './flow-ledger'
+import { allocationDataQuality } from './quality'
 import {
   ALLOCATION_MATERIALIZER_VERSION,
   readMaterializedAllocationChart,
@@ -31,12 +32,10 @@ function entry(
     blockNumber: block,
     blockTimestamp: block * 10,
     source: 'archive_rpc' as const,
+    stateGranularity: 'block_end' as const,
     totalAssets: '100',
     totalDebt: '100',
     totalIdle: '0',
-    unallocatedBps: null,
-    unallocatedSource: null,
-    unallocatedCheckpointId: null,
     allocatorAddress: null,
     allocations: [],
     accountingChecks: { totalAssetsEqualsDebtPlusIdle: true, strategyDebtSumEqualsTotalDebt: true }
@@ -86,8 +85,20 @@ class FakeDatabase implements DatabaseQueryable {
           schema_version: 2,
           materializer_version: ALLOCATION_MATERIALIZER_VERSION,
           generated_at: '1000',
-          coverage_safe_for_timeline: true,
-          coverage_known_gaps: [],
+          data_quality: allocationDataQuality(
+            {
+              source: 'fixture',
+              status: 'verified',
+              fromBlock: 0,
+              throughBlock: 110,
+              fromBlockHash: `0x${'1'.repeat(64)}`,
+              throughBlockHash: `0x${'2'.repeat(64)}`,
+              sourceRevision: 'test',
+              evidenceDigest: 'a'.repeat(64),
+              limitations: []
+            },
+            { blockNumber: 110, blockTimestamp: 1100 }
+          ),
           vault_payload: {
             chainId: 1,
             address: vault.address.toLowerCase() as Address,
@@ -240,7 +251,8 @@ describe('materialized allocation history repository', () => {
 
     const first = await readMaterializedAllocationChart({ vault, limit: 1, direction: 'desc' }, database)
     expect(first.projection).toBe('chart')
-    expect(first.vault).toEqual({ chainId: 1, address: vault.address, name: 'Test vault' })
+    expect(first.vault).toEqual(vaultPayload())
+    expect(first.runId).toBe('7')
     expect(first.currentSnapshot?.id).toBe('current:110')
     expect(first.entries.map((item) => item.id)).toEqual(['flow:90'])
     expect(first.boundaryStates['flow:80']?.blockNumber).toBe(80)

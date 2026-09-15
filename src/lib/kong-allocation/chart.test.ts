@@ -24,12 +24,10 @@ function state(blockNumber: number, firstDebt: string, totalIdle: string): Alloc
     blockNumber,
     blockTimestamp: blockNumber * 10,
     source: 'archive_rpc',
+    stateGranularity: 'block_end',
     totalAssets: '1000',
     totalDebt: (1000n - BigInt(totalIdle)).toString(),
     totalIdle,
-    unallocatedBps: null,
-    unallocatedSource: null,
-    unallocatedCheckpointId: null,
     allocatorAddress: null,
     allocations: [
       {

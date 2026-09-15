@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildStrategyDirectory, eventBlocks, firstVaultEventBlock, orderByDirection } from './service'
+import { buildStrategyDirectory, eventBlocks, firstVaultEventBlock, orderByDirection } from './refresh'
 import type { Address, AllocationSourceEvent, AllocationState, Hash } from './types'
 
 const active = '0x00000000000000000000000000000000000000aa' as Address
@@ -16,9 +16,6 @@ function latestState(): AllocationState {
     totalAssets: '100',
     totalDebt: '100',
     totalIdle: '0',
-    unallocatedBps: 0,
-    unallocatedSource: 'envio_same_block_checkpoint',
-    unallocatedCheckpointId: 'checkpoint:100',
     allocatorAddress: null,
     sourceEventIds: [],
     strategies: [

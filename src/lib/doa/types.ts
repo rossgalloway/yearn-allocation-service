@@ -34,8 +34,6 @@ export interface DoaAllocationCoverage {
   currentComplete: boolean
   targetComplete: boolean
   classification: DoaAllocationCoverageClassification
-  unallocatedBps: number | null
-  unallocatedSource: 'same-timestamp-indexed' | null
 }
 
 export interface DoaOptimizationFreshness {
@@ -47,31 +45,4 @@ export type DoaOptimizationRecord = DoaOptimization & {
   source: DoaOptimizationSource
   allocationCoverage: DoaAllocationCoverage
   freshness: DoaOptimizationFreshness
-}
-
-export interface DoaAllocationSnapshotStrategy {
-  address: string
-  name: string | null
-  nameSource: 'optimizer' | null
-  currentBps: number
-  optimizerCurrentBps: number | null
-  targetBps: number | null
-  indexedTargetDebtRatioBps: number | null
-  optimizerScope: 'optimized' | 'unknown'
-}
-
-export interface DoaAllocationSnapshot {
-  requestedTimestampUtc: string | null
-  stateTimestampUtc: string | null
-  blockNumber: number | null
-  indexedStateId: string | null
-  source: 'envio-allocation-history' | null
-  complete: boolean
-  strategies: DoaAllocationSnapshotStrategy[]
-  unallocatedBps: number | null
-  unallocatedSource: 'same-timestamp-indexed' | null
-}
-
-export type EnrichedDoaOptimizationRecord = DoaOptimizationRecord & {
-  allocationSnapshot: DoaAllocationSnapshot
 }

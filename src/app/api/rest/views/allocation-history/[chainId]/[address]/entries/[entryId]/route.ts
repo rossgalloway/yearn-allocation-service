@@ -2,9 +2,9 @@ import { DatabaseConfigurationError, DatabaseUpstreamError } from '@/lib/databas
 import { json, options } from '@/lib/http'
 import {
   AllocationHistoryEntryNotFoundError,
-  AllocationHistoryNotMaterializedError
+  AllocationHistoryNotMaterializedError,
+  readMaterializedAllocationEntry
 } from '@/lib/kong-allocation/repository'
-import { getKongAllocationHistoryEntry } from '@/lib/kong-allocation/service'
 import { findTestVault } from '@/lib/kong-allocation/vaults'
 
 const ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/
@@ -47,7 +47,7 @@ export async function GET(
   if (selectedRunId === undefined) return json({ error: 'runId is invalid' }, { status: 400 })
 
   try {
-    const detail = await getKongAllocationHistoryEntry({
+    const detail = await readMaterializedAllocationEntry({
       vault,
       entryId: params.entryId,
       runId: selectedRunId
@@ -60,14 +60,13 @@ export async function GET(
           : 'public, max-age=900, s-maxage=900, stale-while-revalidate=600'
     })
   } catch (error) {
-    if (error instanceof AllocationHistoryEntryNotFoundError) {
-      return json({ error: error.message }, { status: 404 })
-    }
     if (
-      error instanceof DatabaseConfigurationError ||
-      error instanceof DatabaseUpstreamError ||
+      error instanceof AllocationHistoryEntryNotFoundError ||
       error instanceof AllocationHistoryNotMaterializedError
     ) {
+      return json({ error: error.message }, { status: 404 })
+    }
+    if (error instanceof DatabaseConfigurationError || error instanceof DatabaseUpstreamError) {
       return json({ error: error.message }, { status: 503 })
     }
     return json(

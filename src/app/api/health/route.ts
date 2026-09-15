@@ -19,25 +19,21 @@ export async function GET() {
   const vaults = listTestVaults()
   const ingestion = {
     envioAllocationHistory: Boolean(process.env.ENVIO_ALLOCATION_GRAPHQL_URL),
-    archiveRpcs: vaults.every((vault) => Boolean(process.env[`RPC_URL_${vault.chainId}`]?.trim())),
-    immutableCoverageRevision: Boolean(process.env.ENVIO_ALLOCATION_COVERAGE_REVISION)
+    archiveRpcs: vaults.every((vault) => Boolean(process.env[`RPC_URL_${vault.chainId}`]?.trim()))
   }
   const doaOptimizationRedis = Boolean(
     process.env.UPSTASH_REDIS_REST_URL?.trim() && process.env.UPSTASH_REDIS_REST_TOKEN?.trim()
   )
-  const configuredSource = process.env.ALLOCATION_HISTORY_SOURCE?.trim().toLowerCase() || 'live'
-  const sourceValid = configuredSource === 'database' || configuredSource === 'live'
   const allowUncertifiedMaterializations =
     process.env.ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION?.trim().toLowerCase() === 'true'
   const postgresConfigured = databaseConfigured()
-  const useDatabase = configuredSource === 'database'
   const postgresReachable = postgresConfigured ? await probeDatabase() : false
   const materializations = postgresReachable ? await readAllocationMaterializationStatuses().catch(() => []) : []
   const expectedRevision = process.env.ENVIO_ALLOCATION_COVERAGE_REVISION?.trim() || null
   const validMaterializations = materializations.filter(
     (item) =>
       item.runId !== null &&
-      (item.coverageSafeForTimeline === true || allowUncertifiedMaterializations) &&
+      (item.eventCoverageStatus === 'verified' || allowUncertifiedMaterializations) &&
       item.schemaVersion === ALLOCATION_SCHEMA_VERSION &&
       item.materializerVersion === ALLOCATION_MATERIALIZER_VERSION &&
       item.entryCount !== null &&
@@ -48,11 +44,7 @@ export async function GET() {
     validMaterializations.map((item) => `${item.chainId}:${item.vaultAddress.toLowerCase()}`)
   )
   const servingReady =
-    sourceValid &&
-    (useDatabase
-      ? postgresReachable &&
-        vaults.every((vault) => activeVaults.has(`${vault.chainId}:${vault.address.toLowerCase()}`))
-      : Object.values(ingestion).every(Boolean))
+    postgresReachable && vaults.every((vault) => activeVaults.has(`${vault.chainId}:${vault.address.toLowerCase()}`))
   const staleCutoff = Date.now() - staleRunMilliseconds()
   const refreshHealthy = materializations.every((item) => {
     if (item.latestAttemptStatus === 'failed') return false
@@ -65,8 +57,7 @@ export async function GET() {
     service: 'yearn-allocation-service',
     timestamp: new Date().toISOString(),
     serving: {
-      source: sourceValid ? configuredSource : 'invalid',
-      sourceValid,
+      source: 'database',
       ready: servingReady,
       allowUncertifiedMaterializations,
       expectedCoverageRevision: expectedRevision,

@@ -1,215 +1,125 @@
-# Yearn Allocation Service
+# Yearn Allocation History Reference
 
-A Next.js API service that serves DOA optimizer intent alongside Yearn Envio Allocation History states.
+An explorable reference implementation of Kong's allocation-history API. The target is the
+[Kong design draft](https://github.com/yearn/kong/tree/3c3f0efe8c68dd572e9bd57fecb3fcb8879ac9d8/docs/allocation-history)
+on `rg/allocation-history-spec`. This service follows its processing responsibilities while using Envio for event acquisition.
 
-The initial state and coverage semantics are informed by `yearn.fi` branch `codex/optimization-allocation-completeness` at `6260c961`. The producer contract comes from the Allocation History entities merged into `yearn-envio` main at `4027315`.
+## Data flow
 
-## Authority boundaries
-
-- Envio `AllocationSourceEvent` and `VaultAccountingCheckpoint` entities own executed on-chain allocation state.
-- The immutable `VaultAllocationCoverage` row decides whether a timeline is safe to consume.
-- `unallocatedBps` is populated only from `totalIdle` in a same-block Envio checkpoint.
-- DOA Redis owns optimizer intent, proposed targets, APR estimates, explanations, and source timestamps.
-- A DOA residual is never treated as idle capital. Certified indexed state may enrich it with separately sourced
-  `unallocatedBps`.
-
-See [docs/data-contract.md](./docs/data-contract.md) for processing and failure semantics.
-See [docs/kong-spec-changes-summary.md](./docs/kong-spec-changes-summary.md) for a short overview of the main changes from the
-original Kong spec and the REST/GraphQL split.
-See [docs/kong-allocation-history-spec-proposed.md](./docs/kong-allocation-history-spec-proposed.md) for the complete proposed
-specification with all changes applied.
-See [docs/kong-allocation-history-spec-redline.md](./docs/kong-allocation-history-spec-redline.md) for a complete proposed
-redline of the original spec.
-For easier review, open the styled
-[HTML diff](./docs/kong-allocation-history-spec-redline.html) through a local static server.
-Prototype decisions that differ from the Kong reference are tracked in
-[docs/reference-spec-deltas.md](./docs/reference-spec-deltas.md).
-
-## Endpoints
-
-### `GET /api/allocations`
-
-Returns one composite vault response:
-
-- `executed`: certified or provisional Envio allocation states and their coverage provenance.
-- `optimizer`: DOA optimization history enriched with timestamp-aligned indexed state when certification permits it.
-
-The endpoint does not reproduce the old `/api/optimization/change` response shape.
-
-Required query parameters:
-
-- `vault`: a 20-byte hex address.
-- `chainId`: positive integer chain ID. Allocation History currently publishes Ethereum coverage only.
-
-Optional query parameters:
-
-- `limit`: number of states, from 1 to 500; defaults to 100.
-- `beforeBlock`: returns states before this block and enables stable older-page traversal.
-- `fromBlock`: lower output bound. The service still replays from the certified coverage start to seed state correctly.
-- `coverageRevision`: select one immutable revision. Production should set `ENVIO_ALLOCATION_COVERAGE_REVISION` instead.
-- `optimizationLimit`: maximum DOA records, from 1 to 500; defaults to 100.
-- `includeUnsafe=1`: read draft coverage only when `ALLOW_UNSAFE_ALLOCATION_DATA=true`. The response remains `complete: false`, `provisional: true`, and `Cache-Control: no-store`.
-
-```bash
-curl 'http://127.0.0.1:3000/api/allocations?chainId=1&vault=0x0000000000000000000000000000000000000000'
+```text
+Envio event reader → ordered evidence and coverage
+                                ↓
+Historical RPC → states → actions + optional optimizer policies → intervals
+                                ↓
+                 validate and publish one Postgres run
+                                ↓
+                     chart and action-detail REST
 ```
 
-Executed state fails closed when no certified `safeForTimeline` row is available. When DOA records are available, the
-endpoint can still return HTTP 200 with `executed.status: "unavailable"`; the optimizer records remain useful but their
-`allocationSnapshot` stays incomplete and has no claimed unallocated value.
+- Envio supplies executed events, assignment/deployment evidence and available event coverage. It does not supply accounting checkpoints to this pipeline.
+- This service reconstructs accounting through historical RPC, classifies/groups actions, and reconciles interval flows.
+- Optimizer policies supply optional targets and proposal-level APR estimates. They do not prove execution or realized performance.
+- Public requests read prepared Postgres records only. They never call Envio, RPC or Redis.
+- Required accounting failures prevent publication. Missing event-coverage proof requires explicit provisional mode; it never becomes a genuine zero or a certified history.
 
-### Powerglove adoption
+## API
 
-Raw DOA fields are retained under `optimizer.records`, including `strategyDebtRatios`, APRs, `explain`, `source`,
-`freshness`, and `allocationCoverage`. Powerglove needs a small adapter for the composite envelope rather than a legacy
-endpoint. Each record's `allocationSnapshot` is the canonical current-allocation overlay when complete.
+### Compact chart
 
-### `GET /api/health`
+```http
+GET /api/rest/views/allocation-history/:chainId/:address?projection=chart&limit=25&direction=desc
+```
 
-Reports the selected serving source, Postgres reachability, active materializations, their certification metadata, and the
-latest refresh result. It never returns URLs or tokens. In database mode, readiness requires a schema-version-2 run for all
-configured vaults; those runs must be certified unless the explicit test-only provisional switch is enabled.
+Returns `runId`, `generatedAt`, vault and asset metadata, `dataQuality`, strategy names, reallocation entries,
+`boundaryStates`, `currentSnapshot`, and `pagination.nextCursor`. Chart is the default projection.
 
-### `GET /api/rest/views/allocation-history/:chainId/:address` (test)
+- `limit`: 1–100, default 25. Filters chart-visible kinds before pagination.
+- `direction`: `desc` (default) or `asc`.
+- `cursor`: pass back unchanged with the same projection and direction. It pins the original immutable run.
+- The current snapshot appears only on the first page, including for a successful history with no reallocations.
+- Each entry contains its run-pinned `detailsHref`.
 
-Without a `projection` parameter, returns the schema-version-2 evidence-rich REST projection proposed for Kong. The response
-contains vault metadata, pagination, and a denormalized `entries` array; it does not expose top-level strategies, states,
-transitions, proposals, or raw events.
-Background jobs read events from Envio, enrich them through the configured archive RPC, and atomically activate a Postgres
-read-model generation. Public requests then read only Postgres. The default reference vaults are:
+Amounts are raw underlying-asset integer strings. Use `vault.assetDecimals` for formatting. Percentages derive from
+`totalIdle / totalAssets` and `currentDebt / totalAssets`; when total assets is zero, the percentage is undefined.
+No checkpoint-backed `unallocatedBps` field is emitted. State timestamps are Unix seconds; `generatedAt` is the build time.
 
-- `yvUSDC-1`: `0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204`
-- `yvUSDT-1`: `0x310B7Ea7475A0B449Cfd73bE81522F1B88eFAFaa`
-- `yvUSD`: `0x696d02Db93291651ED510704c9b286841d506987`
+### Action detail
 
-The route defaults to 25 entries, including a safe-block `current_snapshot`. Each meaningful entry embeds its complete
-whole-group `before` and `after` allocation, calculated strategy changes, compact transaction steps, policy provenance when
-available, and classification evidence. Multi-transaction keeper runs are grouped only when historical allocator trigger
-replay, traced execution path, allocator configuration, and state continuity agree.
+```http
+GET /api/rest/views/allocation-history/:chainId/:address/entries/:entryId?runId=:runId
+```
 
-Responses default to `direction=desc` (newest first). Pass `direction=asc` for chronological order. `limit` accepts 1–100 final
-public entries. When `pagination.nextCursor` is non-null, pass it back unchanged with the same direction to continue through
-the complete materialized history. The opaque cursor pins the immutable run, direction, and selected projection used by the
-first page, so a refresh cannot reorder or skip entries mid-traversal and a chart cursor cannot be used with the full response.
-Raw events are deliberately not exposed by this REST route; they belong in the future Kong GraphQL detail surface.
+Returns the same run's vault metadata and quality, the action's before/after states, transactions, operations,
+execution evidence, optional policy, and full interval reconciliation. Follow `detailsHref` to preserve run identity.
+Omitting `runId` selects the active run; links generated by this API always include it.
 
-Pass `projection=chart` for the lean website-hydration shape. The database filters before applying `limit`, so chart pages
-contain only visible `strategy_reallocation` entries. Deposits, withdrawals, reports, and idle movements remain included in the
-interval ledger between those visible points. The initial page returns the safe-head state separately as `currentSnapshot`;
-cursor pages set it to null.
+States are explicitly `block_end`. Transaction evidence explains operations within those boundaries; it does not
+turn block-end balances into transaction-exact snapshots. Existing related-transaction grouping is preserved;
+an intervening deposit does not automatically split an action. Intervals include intervening activity and their
+unattributed balancing flows remain explicit.
 
-Chart states retain exact raw `totalAssets`, `totalIdle`, and strategy `currentDebt`. Derived BPS values are intentionally
-omitted so the client has one rounding path. Strategy names are deduplicated into the response-level `strategies` dictionary.
-Each entry keeps the three execution axes, proposal-scoped `expectedAprImpact`, and a run-pinned `detailsHref`; transaction,
-operation, classification, and atomic before-state evidence remain available from that detail route.
+`projection=full` is retained as a prepared-data diagnostic list of actions, including kinds omitted from the compact chart.
+It is not an additional route required by the Kong chart contract. The legacy composite `/api/allocations` endpoint is retired.
 
-Every chart interval identifies its boundary entries with `fromEntryId` and `toEntryId` instead of repeating both states.
-`boundaryStates` supplies a referenced state that falls outside the current cursor page. The current snapshot carries the tail
-interval with `toEntryId: null` and `endKind: "safe_head"`. Ledger amounts are raw underlying units. Literal deposits,
-withdrawals, and report refunds use the `external` boundary node; reported gains and losses use the non-custodial `accounting`
-boundary node. Debt updates are derived, and idle round trips may collapse into strategy-to-strategy flows.
+### Quality and errors
 
-The materializer still validates the complete per-node equations before activation. The chart response keeps only
-`balanceStatus`, `attributionStatus`, and the exact sum of `unattributed_asset_change` amounts as `unattributedAmount`; full
-residual equations remain in the stored detail evidence. Chart pagination returns only `nextCursor`. Clients that advertise
-`Accept-Encoding: gzip` receive compressed JSON.
+`dataQuality` separates:
 
-Envio `Deposit` and `Withdraw` rows are context rather than allocation intent. Pure debt updates that only service withdrawals
-do not consume space in the public entries array. If the same transaction or block contains allocator execution, a confirmed
-`DEBT_MANAGER` caller, bad-debt handling, or configuration/lifecycle activity, that action remains visible and retains
-`vaultActivities` with assets, shares, participants, and direct/routed path. Deposit-driven debt updates remain visible as
-`idle_deployment`, including delayed keeper deployment after idle accumulates across separate deposit transactions. Report-only
-accounting transitions are also omitted.
+- `coverage`: source, verified/unverified status, processed block bounds and hashes, optional upstream revision,
+  digest of captured event/deployment evidence, and limitations.
+- `accounting`: RPC source, reconciled status, block-end granularity.
+- `snapshot`: the run's safe block and timestamp.
+- `processingVersion`: the rules used to build the run.
 
-The public `kind` describes the whole grouped asset flow. Strategy debt increases without decreases are `idle_deployment`;
-decreases without increases are `idle_deallocation`; groups containing both are `strategy_reallocation`. If no debt moved, a
-pure policy, configuration, or lifecycle action may supply the kind instead. Exact strategy additions, retirements, max-debt
-changes, allocator settings, and other configuration changes are preserved as structured `operations`; a compound transaction
-keeps the economic-flow kind and carries those operations alongside it.
+An event digest identifies captured inputs; it does not prove complete ingestion or a transactionally frozen upstream read.
+Unavailable coverage remains provisional even when accounting balances. Trace and policy limitations also appear on affected actions.
 
-`execution.automation` independently records whether the amount followed an automatic allocator recommendation or was chosen
-manually. `execution.mechanism` records the call path (`allocator_keeper`, `direct_vault_role`, `governance_safe`, and related
-values), while `execution.targetStatus` records whether an allocator target was `matched`, `overridden`, or unavailable.
-`policy` independently embeds a matching DOA configuration when one is available and remains null otherwise.
+Invalid parameters return 400. A vault without a compatible published history or a missing detail returns 404.
+Database/configuration failures return 503. Unavailable cursors return 400 and require restarting pagination.
+Provisional responses use `Cache-Control: no-store`. A failed refresh leaves the previous run and its timestamps intact.
 
-Archive traces distinguish the top-level originator, relayer path, allocator, and immediate vault caller. Envio `RoleSet`
-history verifies whether that caller held `DEBT_MANAGER` at the execution block. Allocator calls are replayed through historical
-`shouldUpdateDebt`; a target match produces `automation: automatic` and `targetStatus: matched`, while a caller-selected amount
-produces `automation: manual` and `targetStatus: overridden` without changing the economic-flow kind.
-Unresolved traces, role history, or trigger calls remain explicit limitations instead of being inferred from `transactionFrom`.
+## Implementation map
 
-DOA proposal age is not an execution status. A policy application is `confirmed` only when Envio supplies exact matching
-allocator configuration events. When the archive-RPC target configuration exactly matches a proposal but Envio lacks the
-shared allocator event, the inline policy is explicitly `inferred_from_historical_config`.
+| Responsibility | File |
+| --- | --- |
+| Source-neutral reader contract and pinned-fixture reader | `src/lib/kong-allocation/evidence.ts` |
+| Envio acquisition and coverage adapter | `envio-reader.ts`, `envio.ts`, `src/lib/envio/client.ts` |
+| Shared reconstruction pipeline | `src/lib/kong-allocation/refresh.ts` |
+| RPC state, allocator assignment and finalized cache | `materialize.ts`, `allocators.ts`, `rpc.ts`, `historical-cache.ts` |
+| Actions, policies and intervals | `classify.ts`, `doa.ts`, `rest.ts`, `flow-ledger.ts` |
+| Prepared chart, publication and reads | `chart.ts`, `quality.ts`, `repository.ts` |
+| CLI composition of reader, pipeline and publication | `scripts/allocation-materialize.ts` |
 
-`ALLOCATION_HISTORY_SOURCE=database` enables the materialized read path. `live` retains the bounded request-time prototype for
-local shape testing, but it still fails closed unless Envio provides certified coverage and checkpoints. Source selection is
-explicit; adding `DATABASE_URL` alone never cuts traffic over to an empty database.
+Kong can replace the Envio reader with its stored-event reader. No extra GraphQL API, ingestion service, scheduler,
+or production-equivalence system is required here. The captured Kong sample pack remains unchanged and is reference material,
+not the current response schema. See [the contract](docs/data-contract.md) and [database runbook](docs/database.md).
 
-`ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION=true` is a test-only background-materialization switch. It permits Envio events
-and archive-RPC snapshots to produce an active provisional database run when certification entities are absent or incomplete.
-The REST response exposes `dataQuality.certification: "provisional"`, lists the evidence gaps, and is always uncached. Missing
-same-block checkpoints remain null rather than being presented as zero or inferred data. The request-time `live` path remains
-strict.
-
-The materializer stores both the full evidence payload and the compact chart payload, so chart requests do not load and trim
-the larger JSON at request time. See [docs/database.md](./docs/database.md) for migrations, backfill, refresh, verification,
-and cutover. Refreshes reuse successful finalized RPC results and unchanged historical allocation states. They re-scan
-Envio for corrected evidence and assemble a new immutable public projection so grouping and proposal updates remain correct.
-Append-only publication and bounded old-run retention remain separate production decisions.
-
-## Local development
+## Run locally
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env
 bun install
-bun run dev
+bun run db:up
+bun run db:migrate
+bun run allocation:backfill --vault=yvUSDC-1
+bun run build
+bun run start --port 3000
 ```
 
-Then open `http://127.0.0.1:3000`.
-
-Verification:
+Configure `DATABASE_URL`, Envio and the selected chain's archive RPC. Optional Redis configuration enables policy enrichment.
+For exploratory runs without verified event coverage, explicitly set `ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION=true`.
+The initial defaults are yvUSDC-1, yvUSDT-1 and yvUSD. `ALLOCATION_VAULTS_JSON` selects a custom cohort on Ethereum, Base or Katana.
 
 ```bash
-bun run lint
 bun run test
+bun run lint
 bunx tsc --noEmit
 bun run build
 ```
 
-## Deployment configuration
+`/api/health` reports serving readiness and refresh status. Manual backfills and refreshes share the same pipeline;
+refresh rereads event evidence while reusing successful finalized RPC/state reads. Production scheduling, bounded incremental
+event ingestion and retained-run cleanup remain Kong implementation work.
 
-The repository follows the same Yearn Vercel deployment pattern as `katana-apr-service`. Configure secrets outside the repository:
-
-- `ENVIO_ALLOCATION_GRAPHQL_URL`
-- `ENVIO_ALLOCATION_GRAPHQL_TOKEN` when the candidate deployment is authenticated
-- `ENVIO_ALLOCATION_COVERAGE_REVISION`
-- `RPC_URL_1`
-- `UPSTASH_REDIS_REST_URL`
-- `UPSTASH_REDIS_REST_TOKEN`
-- `DATABASE_URL`
-- `ALLOCATION_HISTORY_SOURCE=database` after all backfills pass health checks
-
-`ALLOW_UNSAFE_ALLOCATION_DATA` and `ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION` must remain false in production.
-
-
-### Allocator assignment reference update
-
-Allocator assignments come from Envio `AddedNewVault` and `UpdateDebtAllocator` evidence from the authoritative Role Manager. Factory deployments identify the contract family; they never assign a vault. Initial custom addresses, replacement addresses, and zero clears are retained independently of ABI support. Responses include `allocatorResolution` with the assignment, support state, family, and block used for enrichment. Shared allocator control events retain allocator scope. Unresolved evidence prevents certified publication.
-
-Ethereum (1), Base (8453), and Katana (747474) are supported through `ALLOCATION_VAULTS_JSON`, an explicit array of `{chainId,address,label}` objects. Configure each selected chain's `RPC_URL_<chainId>` and obtain per-vault immutable coverage before backfilling. The three existing Ethereum samples remain the default. `--chain=<chainId>` selects a chain for the materialization script.
-
-Run migrations before rematerializing: migration 0004 retains allocator evidence with each run. The materializer version changed to `allocation-history-v2-allocator-assignment`; earlier runs must be rebuilt. This requires the local follow-up to Envio PR #58 described in [the implementation notes](docs/envio-pr58-follow-up.md). Envio schema availability and deterministic fixture tests are not proof of complete production replay or certified history on any chain.
-
-
-### Historical read efficiency
-
-Background materializations use Multicall3 for compatible same-block getters and a persistent Postgres cache for finalized
-reads, bytecode, transactions, and traces. Derived states are reused when their canonical block and input evidence agree;
-late evidence invalidates the affected states. Finalized and indexed heads bound every background run. See the
-[cache runbook](docs/database.md#persistent-finalized-evidence-and-incremental-states) for failure behavior, validation controls,
-and per-run counters. Database-backed API requests do not make RPC calls.
-
-The local provisional preview currently enrolls the 21-vault manifest in `docs/coverage-review/proposed-vaults.json`
-(13 Ethereum, 2 Base, 6 Katana). See [the coverage review](docs/coverage-review/README.md) for the inventory, cache
-measurements, and per-vault API validation. Refreshes remain manual.
+Migration 0006 adds structured quality while preserving older runs. Rebuild selected vaults with processing version
+`allocation-history-v2-event-reader` before serving them through this branch. Old checkpoint certifications are not reinterpreted.

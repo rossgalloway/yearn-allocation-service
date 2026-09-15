@@ -17,7 +17,6 @@ import type {
 
 const REQUEST_TIMEOUT_MS = 30_000
 const RPC_BATCH_SIZE = 100
-const DEFAULT_SAFE_BLOCK_LAG = 12
 
 const SELECTOR = {
   name: '0x06fdde03',
@@ -346,6 +345,37 @@ async function readUncachedContractCalls(
   return results
 }
 
+export async function readBlockIdentities(
+  chainId: number,
+  numbers: readonly number[]
+): Promise<Map<number, { number: number; hash: string; timestamp: number }>> {
+  const unique = [...new Set(numbers)]
+  const responses = await batchedRequests(
+    chainId,
+    unique.map((number) => ({ method: 'eth_getBlockByNumber', params: [blockTag(number), false] }))
+  )
+  return new Map(
+    responses.map((response, index) => {
+      const block = response.result as { number?: string; hash?: string; timestamp?: string } | undefined
+      if (
+        !block?.number ||
+        !block.timestamp ||
+        !/^0x[a-fA-F0-9]{64}$/.test(block.hash ?? '') ||
+        Number(BigInt(block.number)) !== unique[index]
+      )
+        throw new ArchiveRpcUpstreamError('Invalid historical block identity')
+      return [
+        unique[index],
+        {
+          number: unique[index],
+          hash: (block.hash as string).toLowerCase(),
+          timestamp: Number(BigInt(block.timestamp))
+        }
+      ]
+    })
+  )
+}
+
 export async function readBlockTimestamps(
   chainId: number,
   blockNumbers: readonly number[]
@@ -381,15 +411,12 @@ export async function readLatestSafeBlock(chainId: number): Promise<{ blockNumbe
   const cache = historicalCache()
   if (cache && cache.chainId === chainId)
     return { blockNumber: cache.finalized.number, blockTimestamp: cache.finalized.timestamp }
-  const [latestResponse] = await batchedRequests(chainId, [{ method: 'eth_blockNumber', params: [] }])
-  const latestHex = hexData(latestResponse?.result)
-  if (!latestHex) throw new ArchiveRpcUpstreamError('Archive RPC did not return the latest block number')
-  const latest = Number(BigInt(latestHex))
-  const configuredLag = Number.parseInt(process.env.ALLOCATION_TEST_SAFE_BLOCK_LAG ?? '', 10)
-  const lag = Number.isSafeInteger(configuredLag) && configuredLag >= 0 ? configuredLag : DEFAULT_SAFE_BLOCK_LAG
-  const blockNumber = Math.max(0, latest - lag)
-  const timestamps = await readBlockTimestamps(chainId, [blockNumber])
-  return { blockNumber, blockTimestamp: timestamps.get(blockNumber) as number }
+  const [response] = await batchedRequests(chainId, [{ method: 'eth_getBlockByNumber', params: ['finalized', false] }])
+  const block = response?.result as { number?: unknown; timestamp?: unknown } | undefined
+  const number = hexData(block?.number)
+  const timestamp = hexData(block?.timestamp)
+  if (!number || !timestamp) throw new ArchiveRpcUpstreamError('Archive RPC did not return a finalized block')
+  return { blockNumber: Number(BigInt(number)), blockTimestamp: Number(BigInt(timestamp)) }
 }
 
 export async function readTransactionContexts(

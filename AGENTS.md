@@ -4,10 +4,13 @@
 
 This service exposes Yearn vault allocation history. Keep the authority boundaries explicit:
 
-- Envio Allocation History owns executed on-chain events and indexed accounting checkpoints.
-- Optimizer proposal feeds are outside this service's contract.
-- Only a same-block indexed checkpoint may populate `unallocatedBps`.
-- Envio timeline responses must fail closed unless their immutable coverage row has `safeForTimeline: true`.
+- Envio supplies ordered on-chain event evidence through the event-reader adapter.
+- This service owns historical RPC accounting, action processing, interval validation, and prepared REST responses.
+- Optimizer policies are optional enrichment; a proposal never proves execution or realized return.
+- Keep event coverage separate from accounting validity. Unverified coverage requires explicit provisional mode.
+- Expose raw idle/assets/debt amounts. Do not depend on Envio accounting checkpoints or reintroduce checkpoint-backed ratios.
+- Preserve the current grouping behavior: intervening deposits do not automatically split related keeper actions.
+- Public routes read immutable Postgres runs without request-time upstream work.
 
 ## Commands
 

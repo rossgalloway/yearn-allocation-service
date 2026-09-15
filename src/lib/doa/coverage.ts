@@ -33,8 +33,6 @@ export function calculateDoaAllocationCoverage(
     currentComplete,
     targetComplete,
     classification:
-      currentComplete && targetComplete ? 'complete' : hasIncludedAllocation ? 'partial-optimizer-scope' : 'unknown',
-    unallocatedBps: null,
-    unallocatedSource: null
+      currentComplete && targetComplete ? 'complete' : hasIncludedAllocation ? 'partial-optimizer-scope' : 'unknown'
   }
 }

@@ -23,7 +23,6 @@ interface EventDefinition {
   sourceLabel: AllocationSourceEvent['sourceLabel']
   sourceAddressField: string
   strategyField?: string
-  contextOnly?: boolean
   args: (row: Record<string, unknown>) => Record<string, unknown>
 }
 
@@ -61,7 +60,6 @@ const VAULT_EVENTS: EventDefinition[] = [
     fields: 'vaultAddress sender owner assets shares',
     sourceLabel: 'vault',
     sourceAddressField: 'vaultAddress',
-    contextOnly: true,
     args: (row) => ({
       sender: address(row.sender),
       owner: address(row.owner),
@@ -76,7 +74,6 @@ const VAULT_EVENTS: EventDefinition[] = [
     fields: 'vaultAddress sender receiver owner assets shares',
     sourceLabel: 'vault',
     sourceAddressField: 'vaultAddress',
-    contextOnly: true,
     args: (row) => ({
       sender: address(row.sender),
       receiver: address(row.receiver),
@@ -202,14 +199,6 @@ const VAULT_EVENTS: EventDefinition[] = [
     args: (row) => ({ accountant: address(row.accountant) })
   }
 ]
-
-const CONTEXT_ONLY_EVENT_NAMES = new Set(
-  VAULT_EVENTS.filter((definition) => definition.contextOnly === true).map((definition) => definition.eventName)
-)
-
-export function isAllocationTransitionEvent(event: AllocationSourceEvent): boolean {
-  return !CONTEXT_ONLY_EVENT_NAMES.has(event.eventName)
-}
 
 function safeInteger(value: unknown, field: string): number {
   const parsed = typeof value === 'number' ? value : Number(value)
@@ -597,12 +586,4 @@ export async function fetchCompleteKongAllocationEvents(input: {
       left.id.localeCompare(right.id)
   )
   return { events, deployments, unresolvedEventIds, truncatedEventFamilies: [], normalizedSupplementAvailable }
-}
-
-export async function fetchKongAllocationEvents(input: {
-  chainId: number
-  vaultAddress: Address
-  toBlock: number
-}): Promise<EnvioEventBatch> {
-  return fetchCompleteKongAllocationEvents({ ...input, fromBlock: 0, maxEvents: 250_000 })
 }

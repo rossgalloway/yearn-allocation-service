@@ -15,9 +15,7 @@ describe('calculateDoaAllocationCoverage', () => {
       targetResidualBps: 5843,
       currentComplete: false,
       targetComplete: false,
-      classification: 'partial-optimizer-scope',
-      unallocatedBps: null,
-      unallocatedSource: null
+      classification: 'partial-optimizer-scope'
     })
   })
 

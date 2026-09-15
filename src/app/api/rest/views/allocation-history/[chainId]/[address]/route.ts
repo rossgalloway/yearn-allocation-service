@@ -1,12 +1,11 @@
-import { AllocationCoverageError } from '@/lib/allocation/service'
 import { DatabaseConfigurationError, DatabaseUpstreamError } from '@/lib/database/client'
-import { DoaConfigurationError, DoaUpstreamError } from '@/lib/doa/client'
-import { EnvioConfigurationError, EnvioUpstreamError } from '@/lib/envio/client'
 import { json, options } from '@/lib/http'
 import { AllocationHistoryCursorError } from '@/lib/kong-allocation/cursor'
-import { AllocationHistoryNotMaterializedError } from '@/lib/kong-allocation/repository'
-import { ArchiveRpcConfigurationError, ArchiveRpcUpstreamError } from '@/lib/kong-allocation/rpc'
-import { getKongAllocationChart, getKongAllocationHistory } from '@/lib/kong-allocation/service'
+import {
+  AllocationHistoryNotMaterializedError,
+  readMaterializedAllocationChart,
+  readMaterializedAllocationHistory
+} from '@/lib/kong-allocation/repository'
 import type { AllocationHistoryProjection, TimelineDirection } from '@/lib/kong-allocation/types'
 import { findTestVault } from '@/lib/kong-allocation/vaults'
 
@@ -28,29 +27,14 @@ function direction(value: string | null): TimelineDirection | null {
 }
 
 function projection(value: string | null): AllocationHistoryProjection | null {
-  if (value === null) return 'full'
+  if (value === null) return 'chart'
   return value === 'full' || value === 'chart' ? value : null
 }
 
 function upstreamFailure(error: unknown): { status: number; message: string } {
   if (error instanceof AllocationHistoryCursorError) return { status: 400, message: error.message }
-  if (
-    error instanceof EnvioConfigurationError ||
-    error instanceof ArchiveRpcConfigurationError ||
-    error instanceof DoaConfigurationError ||
-    error instanceof DatabaseConfigurationError ||
-    error instanceof AllocationHistoryNotMaterializedError ||
-    error instanceof AllocationCoverageError
-  ) {
-    return { status: 503, message: error.message }
-  }
-  if (
-    error instanceof EnvioUpstreamError ||
-    error instanceof ArchiveRpcUpstreamError ||
-    error instanceof DoaUpstreamError
-  ) {
-    return { status: 502, message: error.message }
-  }
+  if (error instanceof AllocationHistoryNotMaterializedError) return { status: 404, message: error.message }
+  if (error instanceof DatabaseConfigurationError) return { status: 503, message: error.message }
   if (error instanceof DatabaseUpstreamError) return { status: 503, message: error.message }
   return { status: 500, message: error instanceof Error ? error.message : 'Allocation history generation failed' }
 }
@@ -82,7 +66,9 @@ export async function GET(request: Request, context: { params: Promise<{ chainId
   try {
     const input = { vault, limit: parsedLimit, direction: selectedDirection, cursor }
     const history =
-      selectedProjection === 'chart' ? await getKongAllocationChart(input) : await getKongAllocationHistory(input)
+      selectedProjection === 'chart'
+        ? await readMaterializedAllocationChart(input)
+        : await readMaterializedAllocationHistory(input)
     return json(history, {
       request,
       cacheControl:

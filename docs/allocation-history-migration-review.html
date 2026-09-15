@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Allocation history — migration review</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; color: #222; background: #fafaf8; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1000px; margin: auto; padding: 48px 24px 80px; }
+    h1 { font-size: clamp(30px, 5vw, 46px); letter-spacing: -.04em; line-height: 1.1; margin: 16px 0 24px; }
+    h2 { margin-top: 48px; padding-top: 20px; border-top: 1px solid #bbb; font-size: 24px; }
+    h3 { margin: 24px 0 10px; font-size: 19px; }
+    p, li { line-height: 1.65; }
+    p { margin: 10px 0; }
+    li { margin: 8px 0; }
+    a { color: inherit; text-underline-offset: 3px; }
+    code { font-size: .9em; overflow-wrap: anywhere; }
+    .eyebrow, .meta { color: #666; font-size: 13px; }
+    .eyebrow { text-transform: uppercase; letter-spacing: .12em; }
+    .lead { font-size: 20px; max-width: 800px; }
+    .box { border: 1px solid #ccc; background: #fff; padding: 20px; margin: 24px 0; }
+    .flow { display: grid; gap: 10px; grid-template-columns: repeat(3, 1fr); }
+    .flow div { padding: 16px; border: 1px solid #bbb; background: white; }
+    .flow small { display: block; line-height: 1.5; margin-top: 8px; color: #555; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { text-align: left; vertical-align: top; padding: 12px 10px; border-bottom: 1px solid #ddd; line-height: 1.6; overflow-wrap: anywhere; }
+    th { background: #eee; }
+    .source { color: #666; font-size: 13px; overflow-wrap: anywhere; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; background: #eee; padding: 16px; }
+    @media (max-width: 650px) { main { padding: 28px 16px 60px; } .flow { grid-template-columns: 1fr; } th, td { padding: 8px 5px; } }
+  </style>
+</head>
+<body><main>
+<div class="eyebrow">Yearn allocation history · implementation scope · 15 September 2026</div>
+<h1>An explorable reference for Kong.</h1>
+<p class="lead">The agreed goal is an API implementation whose responsibilities and responses are aspirationally equivalent to Kong’s draft, with Envio supplying event evidence here.</p>
+<h2>Agreed scope</h2>
+<ul><li>Keep the chart and action-detail routes. The detail route provides the data an inspector renders.</li>
+<li>Keep the existing prepared full-action list as a diagnostic convenience.</li>
+<li>Put Envio behind an event-reader interface. Reconstruct balances with historical RPC and prepare immutable Postgres responses.</li>
+<li>Retire the legacy composite /api/allocations endpoint and checkpoint-backed ratio contract.</li>
+<li>Preserve existing grouping behavior. An intervening deposit does not automatically split related keeper actions. The earlier proposal to enforce boundary-balance equality was withdrawn.</li>
+<li>Use captured samples as reference material. Independent validation and a second production implementation are outside scope.</li></ul>
+<h2>Implementation</h2>
+<p>Branch: <code>codex/kong-allocation-reference</code>. The source-neutral reader, Envio adapter, shared refresh pipeline, structured quality metadata and prepared chart/detail routes are implemented. Top-level run identity and chart asset metadata are included. RPC accounting is independent of Envio checkpoints.</p>
+<p>Event completeness remains separate from accounting reconciliation. Missing coverage proof keeps a run provisional. Source evidence digests identify captured inputs without claiming a transactionally frozen upstream snapshot.</p>
+<h2>Review the API</h2>
+<pre>GET /api/rest/views/allocation-history/:chainId/:address?projection=chart
+GET /api/rest/views/allocation-history/:chainId/:address/entries/:entryId?runId=:runId</pre>
+<p>The repository README, docs/data-contract.md and docs/database.md describe the current implementation, migration and local verification. The branch preview serves its own published runs and shares finalized RPC cache evidence with the existing local reference.</p>
+<p>Target specification: <a href="https://github.com/yearn/kong/tree/3c3f0efe8c68dd572e9bd57fecb3fcb8879ac9d8/docs/allocation-history">Kong allocation history at 3c3f0e</a>.</p>
+</main></body></html>

@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { databasePool } from '@/lib/database/client'
 import { runDatabaseMigrations } from '@/lib/database/migrations'
-import type { VaultAllocationCoverage } from '@/lib/envio/types'
+import type { EventCoverage } from './evidence'
 import {
   completeMaterializationRun,
   failMaterializationRun,
@@ -27,24 +27,16 @@ const vaultPayload: VaultAllocationVault = {
   assetSymbol: 'TEST',
   assetDecimals: 6
 }
-const coverage: VaultAllocationCoverage = {
-  id: `integration:1:${address}`,
-  chainId: 1,
-  vaultAddress: address,
-  coverageStartBlock: 90,
-  coverageStartBlockHash: `0x${'1'.repeat(64)}`,
-  validatedThroughBlock: 200,
-  validatedThroughBlockHash: `0x${'2'.repeat(64)}`,
-  vaultDiscoveryComplete: true,
-  eventHistoryComplete: true,
-  allocatorDeploymentHistoryComplete: true,
-  allocatorAssignmentHistoryComplete: true,
-  checkpointTriggerAuditComplete: true,
-  safeForTimeline: true,
-  knownGaps: [],
-  coverageRevision: 'integration-test',
-  producerCommit: 'a'.repeat(40),
-  validatedAt: new Date(0).toISOString()
+const coverage: EventCoverage = {
+  source: 'fixture',
+  status: 'verified',
+  fromBlock: 90,
+  throughBlock: 200,
+  fromBlockHash: `0x${'1'.repeat(64)}`,
+  throughBlockHash: `0x${'2'.repeat(64)}`,
+  sourceRevision: 'integration-test',
+  evidenceDigest: 'a'.repeat(64),
+  limitations: []
 }
 
 function state(blockNumber: number): AllocationEntryState {
@@ -52,12 +44,10 @@ function state(blockNumber: number): AllocationEntryState {
     blockNumber,
     blockTimestamp: blockNumber * 10,
     source: 'archive_rpc',
+    stateGranularity: 'block_end',
     totalAssets: '100',
     totalDebt: '100',
     totalIdle: '0',
-    unallocatedBps: null,
-    unallocatedSource: null,
-    unallocatedCheckpointId: null,
     allocatorAddress: null,
     allocations: [],
     accountingChecks: {
@@ -127,7 +117,7 @@ describeDatabase('Postgres allocation history repository', () => {
       ],
       generatedAt: 1_000,
       safeBlock: { blockNumber: 110, blockTimestamp: 1_100 },
-      coverage,
+      coverage: { ...coverage, throughBlock: 110 },
       vault: vaultPayload,
       entries: [
         entry('action:90', 90, 'strategy_reallocation'),
@@ -185,7 +175,7 @@ describeDatabase('Postgres allocation history repository', () => {
       run: secondRun,
       generatedAt: 2_000,
       safeBlock: { blockNumber: 120, blockTimestamp: 1_200 },
-      coverage,
+      coverage: { ...coverage, throughBlock: 120 },
       vault: vaultPayload,
       entries: [entry('action:105', 105, 'strategy_reallocation'), entry('current:120', 120, 'current_snapshot')]
     })
@@ -231,21 +221,21 @@ describeDatabase('Postgres allocation history repository', () => {
     const run = await startMaterializationRun({ vault, mode: 'refresh' })
     const provisionalCoverage = {
       ...coverage,
-      safeForTimeline: false,
-      knownGaps: ['integration test coverage is provisional']
+      status: 'unverified' as const,
+      limitations: ['integration test coverage is provisional']
     }
     await completeMaterializationRun({
       run,
       generatedAt: 3_000,
       safeBlock: { blockNumber: 130, blockTimestamp: 1_300 },
-      coverage: provisionalCoverage,
+      coverage: { ...provisionalCoverage, throughBlock: 130 },
       vault: vaultPayload,
       entries: [entry('current:130', 130, 'current_snapshot')],
       allowProvisional: true
     })
 
     const response = await readMaterializedAllocationHistory({ vault, limit: 1, direction: 'desc' })
-    expect(response.dataQuality).toEqual({
+    expect(response.dataQuality).toMatchObject({
       certification: 'provisional',
       limitations: ['integration test coverage is provisional']
     })

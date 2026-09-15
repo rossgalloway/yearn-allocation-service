@@ -1,5 +1,4 @@
 import type { QueryResult, QueryResultRow } from 'pg'
-import { allocationCoverageContractIssues } from '@/lib/allocation/service'
 import {
   type DatabaseQueryable,
   DatabaseUpstreamError,
@@ -7,7 +6,11 @@ import {
   databaseQuery,
   withDatabaseTransaction
 } from '@/lib/database/client'
-import type { VaultAllocationCoverage } from '@/lib/envio/types'
+import { assertEvidence, type EventCoverage } from './evidence'
+import { ALLOCATION_MATERIALIZER_VERSION, type AllocationDataQuality, allocationDataQuality } from './quality'
+
+export { ALLOCATION_MATERIALIZER_VERSION } from './quality'
+
 import { buildAllocationChartPayload } from './chart'
 import { AllocationHistoryCursorError, decodeAllocationHistoryCursor, encodeAllocationHistoryCursor } from './cursor'
 import { buildAllocationFlowIntervals } from './flow-ledger'
@@ -28,7 +31,6 @@ import type {
 import type { TestVault } from './vaults'
 
 export const ALLOCATION_SCHEMA_VERSION = 2
-export const ALLOCATION_MATERIALIZER_VERSION = 'allocation-history-v2-allocator-assignment'
 const DEFAULT_STALE_RUN_SECONDS = 6 * 60 * 60
 const ENTRY_INSERT_BATCH_SIZE = 250
 
@@ -38,8 +40,7 @@ interface ProjectionRow extends QueryResultRow {
   schema_version: number
   materializer_version: string
   generated_at: string
-  coverage_safe_for_timeline: boolean
-  coverage_known_gaps: string[] | string
+  data_quality: AllocationDataQuality | string
   vault_payload: VaultAllocationVault | string
 }
 
@@ -94,8 +95,7 @@ async function projectionForPage(
        r.schema_version,
        r.materializer_version,
        r.generated_at::text,
-       r.coverage_safe_for_timeline,
-       r.coverage_known_gaps,
+       r.data_quality,
        r.vault_payload
      FROM allocation_history_projection p
      JOIN allocation_history_run r ON r.projection_id = p.id
@@ -108,7 +108,12 @@ async function projectionForPage(
   )
   const row = result.rows[0]
   if (!row && cursor) throw new AllocationHistoryCursorError('Allocation history cursor is no longer available')
-  if (row?.schema_version !== ALLOCATION_SCHEMA_VERSION || row.generated_at === null || row.vault_payload === null) {
+  if (
+    row?.schema_version !== ALLOCATION_SCHEMA_VERSION ||
+    row.materializer_version !== ALLOCATION_MATERIALIZER_VERSION ||
+    row.generated_at === null ||
+    row.vault_payload === null
+  ) {
     throw new AllocationHistoryNotMaterializedError()
   }
   return row
@@ -160,10 +165,6 @@ export async function readMaterializedAllocationHistory(
   const hasMore = result.rows.length > input.limit
   const selected = result.rows.slice(0, input.limit)
   const entries = selected.map((row) => jsonObject(row.payload, 'allocation entry'))
-  const limitations = jsonObject(projection.coverage_known_gaps, 'coverage limitations')
-  if (!Array.isArray(limitations) || !limitations.every((item) => typeof item === 'string')) {
-    throw new DatabaseUpstreamError('Postgres returned invalid coverage limitations JSON')
-  }
   const last = selected.at(-1)
   const nextCursor =
     hasMore && last
@@ -181,12 +182,10 @@ export async function readMaterializedAllocationHistory(
   return {
     schemaVersion: ALLOCATION_SCHEMA_VERSION,
     projection: 'full',
+    runId: projection.run_id,
     generatedAt: Number(projection.generated_at),
     direction: input.direction,
-    dataQuality: {
-      certification: projection.coverage_safe_for_timeline ? 'certified' : 'provisional',
-      limitations
-    },
+    dataQuality: projectionQuality(projection),
     vault: jsonObject(projection.vault_payload, 'vault metadata'),
     entries,
     pagination: {
@@ -198,12 +197,17 @@ export async function readMaterializedAllocationHistory(
   }
 }
 
-function projectionLimitations(projection: ProjectionRow): string[] {
-  const limitations = jsonObject(projection.coverage_known_gaps, 'coverage limitations')
-  if (!Array.isArray(limitations) || !limitations.every((item) => typeof item === 'string')) {
-    throw new DatabaseUpstreamError('Postgres returned invalid coverage limitations JSON')
+function projectionQuality(projection: ProjectionRow): AllocationDataQuality {
+  const quality = jsonObject(projection.data_quality, 'allocation data quality')
+  if (
+    !quality ||
+    quality.processingVersion !== ALLOCATION_MATERIALIZER_VERSION ||
+    !quality.coverage ||
+    !Array.isArray(quality.limitations)
+  ) {
+    throw new DatabaseUpstreamError('Materialized allocation quality is unavailable')
   }
-  return limitations
+  return quality
 }
 
 function materializedChartPayload(
@@ -383,17 +387,11 @@ export async function readMaterializedAllocationChart(
   return {
     schemaVersion: ALLOCATION_SCHEMA_VERSION,
     projection: 'chart',
+    runId: projection.run_id,
     generatedAt: Number(projection.generated_at),
     direction: input.direction,
-    dataQuality: {
-      certification: projection.coverage_safe_for_timeline ? 'certified' : 'provisional',
-      limitations: projectionLimitations(projection)
-    },
-    vault: ((vault) => ({
-      chainId: vault.chainId,
-      address: vault.address,
-      name: vault.name
-    }))(jsonObject(projection.vault_payload, 'vault metadata')),
+    dataQuality: projectionQuality(projection),
+    vault: jsonObject(projection.vault_payload, 'vault metadata'),
     strategies,
     boundaryStates,
     currentSnapshot,
@@ -418,8 +416,7 @@ async function projectionForEntry(
        r.schema_version,
        r.materializer_version,
        r.generated_at::text,
-       r.coverage_safe_for_timeline,
-       r.coverage_known_gaps,
+       r.data_quality,
        r.vault_payload
      FROM allocation_history_projection p
      JOIN allocation_history_run r ON r.projection_id = p.id
@@ -432,7 +429,12 @@ async function projectionForEntry(
   )
   const row = result.rows[0]
   if (!row && runId) throw new AllocationHistoryEntryNotFoundError()
-  if (row?.schema_version !== ALLOCATION_SCHEMA_VERSION || row.generated_at === null || row.vault_payload === null) {
+  if (
+    row?.schema_version !== ALLOCATION_SCHEMA_VERSION ||
+    row.materializer_version !== ALLOCATION_MATERIALIZER_VERSION ||
+    row.generated_at === null ||
+    row.vault_payload === null
+  ) {
     throw new AllocationHistoryNotMaterializedError()
   }
   return row
@@ -461,11 +463,9 @@ export async function readMaterializedAllocationEntry(
     return {
       schemaVersion: ALLOCATION_SCHEMA_VERSION,
       projection: 'detail',
+      runId: projection.run_id,
       generatedAt: Number(projection.generated_at),
-      dataQuality: {
-        certification: projection.coverage_safe_for_timeline ? 'certified' : 'provisional',
-        limitations: projectionLimitations(projection)
-      },
+      dataQuality: projectionQuality(projection),
       vault: jsonObject(projection.vault_payload, 'vault metadata'),
       entry: jsonObject(row.payload, 'allocation entry'),
       interval:
@@ -563,38 +563,36 @@ export async function completeMaterializationRun(input: {
   run: MaterializationRun
   generatedAt: number
   safeBlock: { blockNumber: number; blockTimestamp: number }
-  coverage: VaultAllocationCoverage
+  coverage: EventCoverage
   vault: VaultAllocationVault
   entries: readonly AllocationHistoryEntry[]
   sourceEvents?: readonly AllocationSourceEvent[]
   allocatorDeployments?: readonly AllocatorDeploymentEvidence[]
   allowProvisional?: boolean
 }): Promise<void> {
-  const coverageIssues = allocationCoverageContractIssues(input.coverage)
-  const certified = input.coverage.safeForTimeline && coverageIssues.length === 0
+  assertEvidence(
+    {
+      chainId: input.vault.chainId,
+      vaultAddress: input.vault.address,
+      events: input.sourceEvents ? [...input.sourceEvents] : [],
+      deployments: [],
+      coverage: input.coverage
+    },
+    input.vault,
+    input.safeBlock.blockNumber
+  )
+  const certified = input.coverage.status === 'verified'
   if (!certified && !input.allowProvisional) {
-    throw new DatabaseUpstreamError(
-      `Refusing to activate uncertified allocation history${coverageIssues.length > 0 ? `: ${coverageIssues.join(', ')}` : ''}`
-    )
-  }
-  if (!certified && input.coverage.knownGaps.length === 0) {
-    throw new DatabaseUpstreamError('Refusing to activate provisional allocation history without limitations')
+    throw new DatabaseUpstreamError('Refusing to activate unverified event history without explicit provisional mode')
   }
   if (
     !Number.isSafeInteger(input.generatedAt) ||
-    !Number.isSafeInteger(input.safeBlock.blockNumber) ||
     !Number.isSafeInteger(input.safeBlock.blockTimestamp) ||
-    input.safeBlock.blockNumber < input.coverage.coverageStartBlock ||
-    input.safeBlock.blockNumber > input.coverage.validatedThroughBlock
+    input.safeBlock.blockNumber !== input.coverage.throughBlock
   ) {
     throw new DatabaseUpstreamError('Refusing to activate allocation history with invalid block bounds')
   }
-  if (
-    input.vault.chainId !== input.coverage.chainId ||
-    input.vault.address.toLowerCase() !== input.coverage.vaultAddress.toLowerCase()
-  ) {
-    throw new DatabaseUpstreamError('Refusing to activate allocation history for mismatched vault coverage')
-  }
+  const quality = allocationDataQuality(input.coverage, input.safeBlock)
   const currentSnapshots = input.entries.filter((entry) => entry.kind === 'current_snapshot')
   if (
     currentSnapshots.length !== 1 ||
@@ -706,6 +704,7 @@ export async function completeMaterializationRun(input: {
            vault_payload = $13::jsonb,
            entry_count = $14,
            allocator_evidence = $15::jsonb,
+           data_quality = $16::jsonb,
            completed_at = now()
        WHERE id = $1::bigint`,
       [
@@ -713,14 +712,14 @@ export async function completeMaterializationRun(input: {
         input.generatedAt,
         input.safeBlock.blockNumber,
         input.safeBlock.blockTimestamp,
-        input.coverage.coverageStartBlock,
-        input.coverage.coverageStartBlockHash,
-        input.coverage.validatedThroughBlock,
-        input.coverage.validatedThroughBlockHash,
-        input.coverage.coverageRevision,
-        input.coverage.producerCommit,
-        input.coverage.safeForTimeline,
-        JSON.stringify(input.coverage.knownGaps),
+        input.coverage.fromBlock,
+        input.coverage.fromBlockHash,
+        input.coverage.throughBlock,
+        input.coverage.throughBlockHash,
+        input.coverage.sourceRevision,
+        null,
+        certified,
+        JSON.stringify(input.coverage.limitations),
         JSON.stringify(input.vault),
         input.entries.length,
         JSON.stringify({
@@ -731,7 +730,8 @@ export async function completeMaterializationRun(input: {
               event.sourceLabel === 'roleManager' ||
               event.eventName === 'UpdateRoleManager'
           )
-        })
+        }),
+        JSON.stringify(quality)
       ]
     )
     if (completed.rowCount !== 1) throw new Error('Materialization run completion failed')
@@ -762,7 +762,7 @@ export interface AllocationMaterializationStatus {
   generatedAt: number | null
   safeBlock: number | null
   coverageRevision: string | null
-  coverageSafeForTimeline: boolean | null
+  eventCoverageStatus: EventCoverage['status'] | null
   schemaVersion: number | null
   materializerVersion: string | null
   entryCount: number | null
@@ -782,7 +782,7 @@ export async function readAllocationMaterializationStatuses(): Promise<Allocatio
     generated_at: string | null
     safe_block: string | null
     coverage_revision: string | null
-    coverage_safe_for_timeline: boolean | null
+    event_coverage_status: EventCoverage['status'] | null
     schema_version: number | null
     materializer_version: string | null
     entry_count: number | null
@@ -800,7 +800,7 @@ export async function readAllocationMaterializationStatuses(): Promise<Allocatio
        r.generated_at::text,
        r.safe_block::text,
        r.coverage_revision,
-       r.coverage_safe_for_timeline,
+       r.data_quality->'coverage'->>'status' AS event_coverage_status,
        r.schema_version,
        r.materializer_version,
        r.entry_count,
@@ -830,7 +830,7 @@ export async function readAllocationMaterializationStatuses(): Promise<Allocatio
     generatedAt: row.generated_at === null ? null : Number(row.generated_at),
     safeBlock: row.safe_block === null ? null : Number(row.safe_block),
     coverageRevision: row.coverage_revision,
-    coverageSafeForTimeline: row.coverage_safe_for_timeline,
+    eventCoverageStatus: row.event_coverage_status,
     schemaVersion: row.schema_version,
     materializerVersion: row.materializer_version,
     entryCount: row.entry_count,

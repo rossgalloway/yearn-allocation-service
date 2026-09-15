@@ -1,3 +1,5 @@
+import type { AllocationDataQuality } from './quality'
+
 export type Address = `0x${string}`
 export type Hash = `0x${string}`
 export type TimelineDirection = 'asc' | 'desc'
@@ -41,12 +43,10 @@ export interface NormalizedAllocationTimeline {
 export interface VaultAllocationHistoryResponse {
   schemaVersion: 2
   projection: 'full'
+  runId: string
   generatedAt: number
   direction: TimelineDirection
-  dataQuality: {
-    certification: 'certified' | 'provisional'
-    limitations: string[]
-  }
+  dataQuality: AllocationDataQuality
   vault: VaultAllocationVault
   entries: AllocationHistoryEntry[]
   pagination: {
@@ -221,15 +221,12 @@ export interface MaterializedAllocationChartPayload {
   detailInterval: AllocationFlowInterval | null
 }
 
-export interface AllocationChartVault {
-  chainId: number
-  address: Address
-  name: string | null
-}
+export type AllocationChartVault = VaultAllocationVault
 
 export interface VaultAllocationChartResponse {
   schemaVersion: 2
   projection: 'chart'
+  runId: string
   generatedAt: number
   direction: TimelineDirection
   dataQuality: VaultAllocationHistoryResponse['dataQuality']
@@ -246,6 +243,7 @@ export interface VaultAllocationChartResponse {
 export interface VaultAllocationHistoryEntryResponse {
   schemaVersion: 2
   projection: 'detail'
+  runId: string
   generatedAt: number
   dataQuality: VaultAllocationHistoryResponse['dataQuality']
   vault: VaultAllocationVault
@@ -278,9 +276,6 @@ export interface AllocationState {
   totalAssets: string
   totalDebt: string
   totalIdle: string | null
-  unallocatedBps: number | null
-  unallocatedSource: 'envio_same_block_checkpoint' | null
-  unallocatedCheckpointId: string | null
   allocatorAddress: Address | null
   allocatorResolution?: AllocatorResolution
   sourceEventIds: string[]
@@ -476,12 +471,10 @@ export interface AllocationEntryState {
   blockNumber: number
   blockTimestamp: number
   source: 'archive_rpc'
+  stateGranularity: 'block_end'
   totalAssets: string
   totalDebt: string
   totalIdle: string | null
-  unallocatedBps: number | null
-  unallocatedSource: 'envio_same_block_checkpoint' | null
-  unallocatedCheckpointId: string | null
   allocatorAddress: Address | null
   allocatorResolution?: AllocatorResolution
   allocations: AllocationEntryStrategyState[]

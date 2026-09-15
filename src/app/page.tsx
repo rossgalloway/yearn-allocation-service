@@ -1,72 +1,71 @@
-const endpoints = [
-  {
-    method: 'GET',
-    path: '/api/allocations?vault=0x…&chainId=1',
-    description: 'DOA optimizer intent overlaid with certified Envio executed allocation states.'
-  },
-  {
-    method: 'GET',
-    path: '/api/health',
-    description: 'Serving readiness, database reachability, certification, and refresh status.'
-  },
-  {
-    method: 'GET',
-    path: '/api/rest/views/allocation-history/1/0xBe53A109B494E5c9f97b9Cd39Fe969BE68BF6204?projection=chart',
-    description: 'Compact chart entries with a separate current snapshot and run-pinned full-detail links.'
-  }
-]
+import { listTestVaults } from '@/lib/kong-allocation/vaults'
+
+export const dynamic = 'force-dynamic'
 
 export default function Home() {
+  const vaults = listTestVaults()
   return (
     <main>
       <header>
-        <p className="eyebrow">YEARn DATA INFRASTRUCTURE</p>
-        <h1>Allocation history, with its evidence attached.</h1>
+        <p className="eyebrow">YEARN · ALLOCATION HISTORY REFERENCE</p>
+        <h1>Explore the data behind allocation history.</h1>
         <p className="lede">
-          A small Next.js service that keeps optimizer intent and executed vault state distinct, materializes
-          chart-ready allocation entries, then serves them to consumers such as Kong and Powerglove.
+          A working reference for Kong’s chart and action-detail API. Open a vault’s chart response, then follow an
+          entry’s detailsHref to inspect its transactions, balances and execution evidence in the same published run.
         </p>
       </header>
-
-      <section className="status" aria-label="Contract summary">
+      <section className="status" aria-label="Processing responsibilities">
         <div>
-          <span>EXECUTION EVIDENCE</span>
-          <strong>Envio + RPC</strong>
+          <span>EVENT ACQUISITION</span>
+          <strong>Envio reader</strong>
         </div>
         <div>
-          <span>REST READ MODEL</span>
-          <strong>Postgres</strong>
+          <span>RECONSTRUCTION</span>
+          <strong>Historical RPC</strong>
         </div>
         <div>
-          <span>OPTIONAL POLICY</span>
-          <strong>DOA</strong>
+          <span>PREPARED RESPONSES</span>
+          <strong>Postgres runs</strong>
         </div>
       </section>
-
       <section>
         <div className="section-heading">
-          <h2>API</h2>
+          <h2>EXPLORE A VAULT</h2>
           <p className="section-copy">
-            Responses are CORS-enabled and CDN-cacheable only after a successful upstream read.
+            Chart responses contain raw amounts, asset decimals, coverage, a current snapshot, and run-pinned detail
+            links. Provisional coverage remains explicit even when balances reconcile.
           </p>
         </div>
         <div className="endpoint-list">
-          {endpoints.map((endpoint) => (
-            <article key={endpoint.path}>
-              <div className="route">
-                <span>{endpoint.method}</span>
-                <code>{endpoint.path}</code>
-              </div>
-              <p className="endpoint-copy">{endpoint.description}</p>
-            </article>
-          ))}
+          {vaults.map((vault) => {
+            const path = `/api/rest/views/allocation-history/${vault.chainId}/${vault.address.toLowerCase()}`
+            return (
+              <article key={`${vault.chainId}:${vault.address}`}>
+                <div className="route">
+                  <span>GET</span>
+                  <code>
+                    {vault.label} · chain {vault.chainId}
+                    <br />
+                    {vault.address}
+                  </code>
+                </div>
+                <p className="endpoint-copy">
+                  <a href={`${path}?projection=chart`}>Compact chart JSON</a>
+                  <br />
+                  <a href={`${path}?projection=full`}>All prepared actions JSON</a>
+                </p>
+              </article>
+            )
+          })}
         </div>
       </section>
-
       <footer>
         <p className="footer-copy">
-          DOA residuals describe optimizer scope, not idle capital. Unallocated allocation is exposed only when a
-          certified Envio checkpoint proves it at the optimizer timestamp.
+          Historical states are block-end balances. Interval flows include activity between chart points; optimizer APR
+          changes are proposal estimates. Follow pagination.nextCursor to explore older entries without changing runs.
+        </p>
+        <p className="footer-copy">
+          <a href="/api/health">Serving readiness and refresh status</a>
         </p>
       </footer>
     </main>

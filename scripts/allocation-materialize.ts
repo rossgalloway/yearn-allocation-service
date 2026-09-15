@@ -1,12 +1,13 @@
 import { databasePool } from '@/lib/database/client'
 import { runDatabaseMigrations } from '@/lib/database/migrations'
+import { envioEventReader } from '@/lib/kong-allocation/envio-reader'
+import { materializeCompleteKongAllocationHistory } from '@/lib/kong-allocation/refresh'
 import {
   completeMaterializationRun,
   failMaterializationRun,
   startMaterializationRun
 } from '@/lib/kong-allocation/repository'
 import { withCachedHistoricalReads } from '@/lib/kong-allocation/rpc'
-import { materializeCompleteKongAllocationHistory } from '@/lib/kong-allocation/service'
 import { listTestVaults } from '@/lib/kong-allocation/vaults'
 
 function argument(name: string): string | null {
@@ -36,12 +37,12 @@ try {
       run = await startMaterializationRun({ vault, mode })
       console.log(`${mode === 'backfill' ? 'Backfilling' : 'Refreshing'} ${vault.label}`)
       const { result, stats } = await withCachedHistoricalReads(vault.chainId, () =>
-        materializeCompleteKongAllocationHistory(vault)
+        materializeCompleteKongAllocationHistory(vault, envioEventReader)
       )
       console.log(`${vault.label}: ${JSON.stringify(stats)}`)
       await completeMaterializationRun({ run, ...result })
       console.log(
-        `${vault.label}: activated ${result.coverage.safeForTimeline ? 'certified' : 'PROVISIONAL'} run ${run.id} with ${result.entries.length} entries through block ${result.safeBlock.blockNumber}`
+        `${vault.label}: activated ${result.coverage.status === 'verified' ? 'certified' : 'PROVISIONAL'} run ${run.id} with ${result.entries.length} entries through block ${result.safeBlock.blockNumber}`
       )
     } catch (error) {
       failures += 1

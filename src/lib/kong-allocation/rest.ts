@@ -15,9 +15,7 @@ import type {
   AllocationStateStrategy,
   AllocationTransition,
   AllocationTransitionEffect,
-  NormalizedAllocationTimeline,
-  TimelineDirection,
-  VaultAllocationHistoryResponse
+  NormalizedAllocationTimeline
 } from './types'
 
 const EXECUTION_GROUP_MAX_SECONDS = 60 * 60
@@ -78,12 +76,10 @@ function entryState(state: AllocationState, names: ReadonlyMap<Address, string |
     blockNumber: state.blockNumber,
     blockTimestamp: state.blockTimestamp,
     source: 'archive_rpc',
+    stateGranularity: 'block_end',
     totalAssets: state.totalAssets,
     totalDebt: state.totalDebt,
     totalIdle: state.totalIdle,
-    unallocatedBps: state.unallocatedBps,
-    unallocatedSource: state.unallocatedSource,
-    unallocatedCheckpointId: state.unallocatedCheckpointId,
     allocatorAddress: state.allocatorAddress,
     allocatorResolution: state.allocatorResolution,
     allocations: state.strategies.map((strategy) => ({
@@ -824,7 +820,7 @@ function entry(
         strategies: strategyChanges(beforeState, afterState, names)
       }
   return {
-    id: `allocation-entry:${chainId}:${vaultAddress.toLowerCase()}:${first.blockNumber}-${last.blockNumber}`,
+    id: `allocation-entry:${chainId}:${vaultAddress.toLowerCase()}:${first.blockNumber}-${last.blockNumber}${isCurrent ? ':current' : ''}`,
     kind,
     startBlock: first.blockNumber,
     endBlock: last.blockNumber,
@@ -872,35 +868,4 @@ export function buildRestAllocationEntries(input: {
       )
     )
     .filter((value): value is AllocationHistoryEntry => value !== null)
-}
-
-export function buildRestAllocationHistory(input: {
-  timeline: NormalizedAllocationTimeline
-  doaRecords: readonly DoaOptimizationRecord[]
-  doaRecordsAvailable?: boolean
-  direction: TimelineDirection
-  limit: number
-  hasMore: boolean
-}): VaultAllocationHistoryResponse {
-  const matchingEntries = buildRestAllocationEntries(input).sort((left, right) => {
-    const multiplier = input.direction === 'asc' ? 1 : -1
-    return multiplier * (left.endBlock - right.endBlock) || multiplier * left.id.localeCompare(right.id)
-  })
-  const entries = matchingEntries.slice(0, input.limit)
-
-  return {
-    schemaVersion: 2,
-    projection: 'full',
-    generatedAt: input.timeline.generatedAt,
-    direction: input.direction,
-    dataQuality: { certification: 'certified', limitations: [] },
-    vault: input.timeline.vault,
-    entries,
-    pagination: {
-      limit: input.limit,
-      returned: entries.length,
-      hasMore: input.hasMore || matchingEntries.length > entries.length,
-      nextCursor: null
-    }
-  }
 }

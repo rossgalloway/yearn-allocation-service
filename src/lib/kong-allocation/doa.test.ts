@@ -32,9 +32,7 @@ function record(timestamp: number): DoaOptimizationRecord {
       targetResidualBps: 8000,
       currentComplete: false,
       targetComplete: false,
-      classification: 'partial-optimizer-scope',
-      unallocatedBps: null,
-      unallocatedSource: null
+      classification: 'partial-optimizer-scope'
     },
     freshness: { optimizationTimestampUtc: timestampUtc, latestAvailableTimestampUtc: timestampUtc }
   }

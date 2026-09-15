@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { DoaOptimizationRecord } from '@/lib/doa/types'
-import { buildRestAllocationHistory } from './rest'
+import { buildRestAllocationEntries } from './rest'
+
+function project(input: Parameters<typeof buildRestAllocationEntries>[0]) {
+  return { entries: buildRestAllocationEntries(input) }
+}
+
 import type {
   Address,
   AllocationSourceEvent,
@@ -29,9 +34,6 @@ function state(blockNumber: number, debt: string, idle: string): AllocationState
     totalAssets,
     totalDebt: debt,
     totalIdle: idle,
-    unallocatedBps: Number((BigInt(idle) * 10_000n) / BigInt(totalAssets)),
-    unallocatedSource: 'envio_same_block_checkpoint',
-    unallocatedCheckpointId: `checkpoint:${blockNumber}`,
     allocatorAddress: allocator,
     sourceEventIds: [],
     strategies: [
@@ -57,7 +59,6 @@ function multiStrategyState(blockNumber: number, firstDebt: string, secondDebt: 
   const totalAssets = totalDebt + BigInt(idle)
   result.totalAssets = totalAssets.toString()
   result.totalDebt = totalDebt.toString()
-  result.unallocatedBps = Number((BigInt(idle) * 10_000n) / totalAssets)
   result.strategies[0].currentDebtBps = Number((BigInt(firstDebt) * 10_000n) / totalAssets)
   result.strategies.push({
     ...result.strategies[0],
@@ -141,9 +142,7 @@ function proposal(): DoaOptimizationRecord {
       targetResidualBps: 4000,
       currentComplete: false,
       targetComplete: false,
-      classification: 'partial-optimizer-scope',
-      unallocatedBps: null,
-      unallocatedSource: null
+      classification: 'partial-optimizer-scope'
     },
     freshness: { optimizationTimestampUtc: timestampUtc, latestAvailableTimestampUtc: timestampUtc }
   }
@@ -197,20 +196,14 @@ function timeline(transitions: AllocationTransition[]): NormalizedAllocationTime
 
 describe('REST allocation history projection', () => {
   it('groups matched allocator idle deployments and embeds snapshots, policy, and transactions', () => {
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([
         transition(100, 99, 100, transactionOne, '700'),
         transition(102, 101, 102, transactionTwo, '1000')
       ]),
-      doaRecords: [proposal()],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: [proposal()]
     })
 
-    expect(result.schemaVersion).toBe(2)
-    expect(result).not.toHaveProperty('states')
-    expect(result).not.toHaveProperty('transitions')
     expect(result.entries).toHaveLength(1)
     expect(result.entries[0]).toMatchObject({
       kind: 'idle_deployment',
@@ -235,16 +228,42 @@ describe('REST allocation history projection', () => {
     })
   })
 
+  it('keeps related keeper actions grouped across an intervening deposit', () => {
+    const source = timeline([
+      transition(100, 99, 100, transactionOne, '700'),
+      transition(102, 101, 102, transactionTwo, '1000')
+    ])
+    source.states = [
+      state(99, '500', '500'),
+      state(100, '700', '300'),
+      state(101, '700', '800'),
+      state(102, '1000', '500')
+    ]
+    source.events = [
+      {
+        ...sourceEvent({ id: 'deposit:101', eventName: 'Deposit', args: { assets: '500', shares: '500' } }),
+        blockNumber: 101,
+        blockTimestamp: 1010
+      }
+    ]
+    const result = project({ timeline: source, doaRecords: [] })
+    expect(result.entries).toHaveLength(1)
+    expect(result.entries[0]).toMatchObject({
+      startBlock: 100,
+      endBlock: 102,
+      before: { totalAssets: '1000' },
+      after: { totalAssets: '1500' }
+    })
+    expect(result.entries[0].execution.transactions).toHaveLength(2)
+  })
+
   it('classifies a strategy decrease with no increase as idle deallocation', () => {
     const source = timeline([transition(100, 99, 100, transactionOne, '500')])
     source.states = [state(99, '700', '300'), state(100, '500', '500')]
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: source,
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0]).toMatchObject({
@@ -262,12 +281,9 @@ describe('REST allocation history projection', () => {
     replay.recommendedDebt = '650'
     replay.absoluteDifference = '50'
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([overridden]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0]).toMatchObject({
@@ -287,12 +303,9 @@ describe('REST allocation history projection', () => {
     source.strategies.push({ address: strategyTwo, name: 'Second strategy', status: 'active' })
     source.states = [multiStrategyState(99, '700', '300', '0'), multiStrategyState(100, '500', '500', '0')]
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: source,
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0]).toMatchObject({
@@ -317,12 +330,9 @@ describe('REST allocation history projection', () => {
       immediateVaultCallerHasDebtManagerRole: true
     }
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([manual]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0].kind).toBe('idle_deployment')
@@ -365,12 +375,9 @@ describe('REST allocation history projection', () => {
       }
     ]
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([withdrawal]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries).toEqual([])
@@ -393,12 +400,9 @@ describe('REST allocation history projection', () => {
       }
     ]
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([allocatorWithdrawal]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0].kind).toBe('idle_deployment')
@@ -436,12 +440,9 @@ describe('REST allocation history projection', () => {
       }
     ]
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([roleWithdrawal]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0].kind).toBe('idle_deployment')
@@ -478,12 +479,9 @@ describe('REST allocation history projection', () => {
       vaultActivities: undefined
     })
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([withdrawal]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0].kind).toBe('idle_deployment')
@@ -537,12 +535,9 @@ describe('REST allocation history projection', () => {
       })
     ]
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: source,
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0]).toMatchObject({
@@ -601,12 +596,9 @@ describe('REST allocation history projection', () => {
       })
     ]
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: source,
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0]).toMatchObject({
@@ -626,37 +618,15 @@ describe('REST allocation history projection', () => {
     ])
   })
 
-  it('applies the response limit after filtering and grouping', () => {
-    const maintenance = transition(100, 99, 100, transactionOne, '700')
-    const configuration = transition(102, 101, 102, transactionTwo, '1000')
-    configuration.kind = 'manual_config_change'
-    configuration.effects[0].kind = 'manual_config_change'
-
-    const result = buildRestAllocationHistory({
-      timeline: timeline([maintenance, configuration]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 1,
-      hasMore: false
-    })
-
-    expect(result.entries).toHaveLength(1)
-    expect(result.entries[0].kind).toBe('idle_deployment')
-    expect(result.pagination).toEqual({ limit: 1, returned: 1, hasMore: true, nextCursor: null })
-  })
-
   it('keeps the synthetic current snapshot free of inferred execution and configuration changes', () => {
     const current = transition(100, 99, 100, transactionOne, '700')
     current.kind = 'current_live_tail'
     current.fromStateId = null
     current.effects = []
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([current]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries[0]).toMatchObject({
@@ -672,12 +642,9 @@ describe('REST allocation history projection', () => {
     report.kind = 'report_only_state_change'
     report.effects[0].kind = 'report_only_state_change'
 
-    const result = buildRestAllocationHistory({
+    const result = project({
       timeline: timeline([report]),
-      doaRecords: [],
-      direction: 'desc',
-      limit: 25,
-      hasMore: false
+      doaRecords: []
     })
 
     expect(result.entries).toEqual([])

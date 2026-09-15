@@ -1,0 +1,71 @@
+{
+  "checkedAt": "2026-09-15T20:51:07.257860+00:00",
+  "branch": "codex/kong-allocation-reference",
+  "baseCommit": "dca4605747d1cc7b4f00c660de9636bde30a7c0f",
+  "uncommittedChanges": true,
+  "mode": "production-build-preview",
+  "vault": {
+    "name": "USDC-1 yVault",
+    "symbol": "yvUSDC-1",
+    "address": "0xbe53a109b494e5c9f97b9cd39fe969be68bf6204",
+    "chainId": 1,
+    "assetSymbol": "USDC",
+    "assetAddress": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "assetDecimals": 6
+  },
+  "runId": "2",
+  "quality": {
+    "coverage": {
+      "source": "envio",
+      "status": "unverified",
+      "fromBlock": 19419991,
+      "limitations": ["Verified event coverage is unavailable; history before the first observed event is unknown"],
+      "throughBlock": 25949082,
+      "fromBlockHash": "0x124ca771f8157865c473ee4b16e0d71d58fa09a89c7dc5df530f248c4e46449e",
+      "evidenceDigest": "fa529d7c2fdaa092a9c47eb7c44ffefcc23c78dd19d2a5352270d054f9967d4a",
+      "sourceRevision": null,
+      "throughBlockHash": "0x68e6f69af243cfd55884229f7c8ac11f4d75536ec243d8975814cced4854c85c"
+    },
+    "snapshot": {
+      "blockNumber": 25949082,
+      "blockTimestamp": 1789068503
+    },
+    "accounting": {
+      "source": "archive_rpc",
+      "status": "reconciled",
+      "granularity": "block_end"
+    },
+    "limitations": ["Verified event coverage is unavailable; history before the first observed event is unknown"],
+    "certification": "provisional",
+    "processingVersion": "allocation-history-v2-event-reader"
+  },
+  "chartPageCounts": [25, 25],
+  "detailMatchesChart": true,
+  "pageIdsDoNotOverlap": true,
+  "currentSnapshotOnlyOnFirstPage": true,
+  "provisionalCacheControl": "no-store",
+  "statusChecks": {
+    "invalidLimit": 400,
+    "missingDetail": 404,
+    "retiredEndpoint": 404
+  },
+  "tests": {
+    "files": 23,
+    "passed": 99,
+    "skipped": 0
+  },
+  "build": "passed",
+  "lint": "passed; existing inventory JSON size warning",
+  "refreshComparison": {
+    "runIds": ["1", "2"],
+    "entriesEach": 1877,
+    "entryPayloadsEqual": true,
+    "secondRunStatesReused": 10053,
+    "secondRunStatesBuilt": 287
+  },
+  "limitations": [
+    "Only yvUSDC-1 was rematerialized and exposed in this preview",
+    "Event coverage remains unverified",
+    "Snapshot is fixed at block 25949082; this is not current vault state"
+  ]
+}

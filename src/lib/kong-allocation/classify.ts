@@ -286,7 +286,7 @@ export function buildTransitions(input: {
     const effects = isLiveTail ? [] : transactionEffects(blockEvents, actors, input.triggerReplays ?? new Map())
     const transactionHashes = [...new Set(effects.map((effect) => effect.transactionHash))]
     return {
-      id: `allocation-transition:${input.chainId}:${input.vaultAddress.toLowerCase()}:${point.blockNumber}`,
+      id: `allocation-transition:${input.chainId}:${input.vaultAddress.toLowerCase()}:${point.blockNumber}${isLiveTail ? ':current' : ''}`,
       kind: isLiveTail ? 'current_live_tail' : transitionKind(effects),
       fromStateId: point.fromStateId,
       toStateId: point.toStateId,
