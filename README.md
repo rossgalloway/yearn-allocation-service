@@ -4,6 +4,15 @@ An explorable reference implementation of Kong's allocation-history API. The tar
 [Kong design draft](https://github.com/yearn/kong/tree/3c3f0efe8c68dd572e9bd57fecb3fcb8879ac9d8/docs/allocation-history)
 on `rg/allocation-history-spec`. This service follows its processing responsibilities while using Envio for event acquisition.
 
+## Hosted reference
+
+Explore the [hosted API](https://yearn-allocation-reference.vercel.app) or fetch the
+[yvUSDC-1 chart](https://yearn-allocation-reference.vercel.app/api/rest/views/allocation-history/1/0xbe53a109b494e5c9f97b9cd39fe969be68bf6204?projection=chart).
+The initial dataset covers yvUSDC-1 through September 10, 2026, with explicit provisional coverage. Follow a returned
+`detailsHref` to inspect an action's evidence. Dataset refreshes are manual; deploying code does not refresh history.
+
+See the [hosting runbook](docs/hosting.md) for database ownership and deployment configuration.
+
 ## Data flow
 
 ```text
