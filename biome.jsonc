@@ -1,7 +1,16 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.4.16/schema.json",
   "files": {
-    "includes": ["**", "!node_modules", "!.next", "!.next-reference", "!bun.lock", "!next-env.d.ts", "!*.tsbuildinfo"]
+    "includes": [
+      "**",
+      "!node_modules",
+      "!.next",
+      "!.next-*",
+      "!.vercel",
+      "!bun.lock",
+      "!next-env.d.ts",
+      "!*.tsbuildinfo"
+    ]
   },
   "formatter": {
     "enabled": true,

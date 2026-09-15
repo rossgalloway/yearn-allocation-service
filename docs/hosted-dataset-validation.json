@@ -1,0 +1,812 @@
+{
+  "datasetDate": "2026-09-15",
+  "publicBaseUrl": "https://yearn-allocation-reference.vercel.app",
+  "coverage": "provisional",
+  "sourceManifest": [
+    {
+      "chain_id": 1,
+      "vault_address": "0x9f4330700a36b29952869fac9b33f45eedd8a3d8",
+      "vault_label": "yBOLD",
+      "run_id": "3",
+      "entry_count": 1530,
+      "safe_block": "25985590",
+      "safe_block_timestamp": "1789508183",
+      "generated_at": "1789509147",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0x028ec7330ff87667b6dfb0d94b954c820195336c",
+      "vault_label": "yvDAI-1",
+      "run_id": "5",
+      "entry_count": 512,
+      "safe_block": "25985590",
+      "safe_block_timestamp": "1789508183",
+      "generated_at": "1789509289",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0xaf71a4f5d93fb88b24c67760bcf9688a6c3a54d4",
+      "vault_label": "yvSKY-1",
+      "run_id": "6",
+      "entry_count": 490,
+      "safe_block": "25985590",
+      "safe_block_timestamp": "1789508183",
+      "generated_at": "1789509297",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0x696d02db93291651ed510704c9b286841d506987",
+      "vault_label": "yvUSD",
+      "run_id": "7",
+      "entry_count": 1300,
+      "safe_block": "25985590",
+      "safe_block_timestamp": "1789508183",
+      "generated_at": "1789509301",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0xbe53a109b494e5c9f97b9cd39fe969be68bf6204",
+      "vault_label": "yvUSDC-1",
+      "run_id": "8",
+      "entry_count": 1878,
+      "safe_block": "25985590",
+      "safe_block_timestamp": "1789508183",
+      "generated_at": "1789509324",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0xae7d8db82480e6d8e3873ecbf22cf17b3d8a7308",
+      "vault_label": "yvUSDC-2",
+      "run_id": "9",
+      "entry_count": 1545,
+      "safe_block": "25985590",
+      "safe_block_timestamp": "1789508183",
+      "generated_at": "1789509342",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0x182863131f9a4630ff9e27830d945b1413e347e8",
+      "vault_label": "yvUSDS-1",
+      "run_id": "10",
+      "entry_count": 1658,
+      "safe_block": "25985622",
+      "safe_block_timestamp": "1789508567",
+      "generated_at": "1789509362",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0x310b7ea7475a0b449cfd73be81522f1b88efafaa",
+      "vault_label": "yvUSDT-1",
+      "run_id": "11",
+      "entry_count": 1645,
+      "safe_block": "25985622",
+      "safe_block_timestamp": "1789508567",
+      "generated_at": "1789509389",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0x751f0cc6115410a3ee9ec92d08f46ff6da98b708",
+      "vault_label": "yvWBTC-1",
+      "run_id": "12",
+      "entry_count": 28,
+      "safe_block": "25985622",
+      "safe_block_timestamp": "1789508567",
+      "generated_at": "1789509405",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0xc56413869c6cdf96496f2b1ef801fedbdfa7ddb0",
+      "vault_label": "yvWETH-1",
+      "run_id": "13",
+      "entry_count": 2163,
+      "safe_block": "25985622",
+      "safe_block_timestamp": "1789508567",
+      "generated_at": "1789509407",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0xac37729b76db6438ce62042ae1270ee574ca7571",
+      "vault_label": "yvWETH-2",
+      "run_id": "14",
+      "entry_count": 1226,
+      "safe_block": "25985622",
+      "safe_block_timestamp": "1789508567",
+      "generated_at": "1789509429",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0xbf319ddc2edc1eb6fdf9910e39b37be221c8805f",
+      "vault_label": "yvcrvUSD-2",
+      "run_id": "4",
+      "entry_count": 4514,
+      "safe_block": "25985590",
+      "safe_block_timestamp": "1789508183",
+      "generated_at": "1789509198",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 1,
+      "vault_address": "0x1f6f16945e395593d8050d6cc33e4328a515b648",
+      "vault_label": "yvyYB",
+      "run_id": "15",
+      "entry_count": 660,
+      "safe_block": "25985622",
+      "safe_block_timestamp": "1789508567",
+      "generated_at": "1789509445",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 8453,
+      "vault_address": "0xb13cf163d916917d9cd6e836905ca5f12a1def4b",
+      "vault_label": "TYD",
+      "run_id": "16",
+      "entry_count": 936,
+      "safe_block": "51359599",
+      "safe_block_timestamp": "1789508545",
+      "generated_at": "1789509449",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 8453,
+      "vault_address": "0xc3bd0a2193c8f027b82dde3611d18589ef3f62a9",
+      "vault_label": "yvUSDC-H",
+      "run_id": "17",
+      "entry_count": 1278,
+      "safe_block": "51359599",
+      "safe_block_timestamp": "1789508545",
+      "generated_at": "1789509468",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 747474,
+      "vault_address": "0x93fec6639717b6215a48e5a72a162c50dcc40d68",
+      "vault_label": "yvAUSD",
+      "run_id": "18",
+      "entry_count": 307,
+      "safe_block": "42765598",
+      "safe_block_timestamp": "1789508409",
+      "generated_at": "1789509495",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 747474,
+      "vault_address": "0xe007ca01894c863d7898045ed5a3b4abf0b18f37",
+      "vault_label": "yvvbETH",
+      "run_id": "19",
+      "entry_count": 631,
+      "safe_block": "42765598",
+      "safe_block_timestamp": "1789508409",
+      "generated_at": "1789509521",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 747474,
+      "vault_address": "0x80c34bd3a3569e126e7055831036aa7b212cb159",
+      "vault_label": "yvvbUSDC",
+      "run_id": "20",
+      "entry_count": 2011,
+      "safe_block": "42765598",
+      "safe_block_timestamp": "1789508409",
+      "generated_at": "1789509548",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 747474,
+      "vault_address": "0x8fb1c10ad4417eca341a1d903ff437d25ff87a4e",
+      "vault_label": "yvvbUSDS",
+      "run_id": "21",
+      "entry_count": 7,
+      "safe_block": "42765598",
+      "safe_block_timestamp": "1789508409",
+      "generated_at": "1789509714",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 747474,
+      "vault_address": "0x9a6bd7b6fd5c4f87eb66356441502fc7dcdd185b",
+      "vault_label": "yvvbUSDT",
+      "run_id": "22",
+      "entry_count": 1273,
+      "safe_block": "42765598",
+      "safe_block_timestamp": "1789508409",
+      "generated_at": "1789509715",
+      "certification": "provisional"
+    },
+    {
+      "chain_id": 747474,
+      "vault_address": "0xaa0362ecc584b985056e47812931270b99c91f9d",
+      "vault_label": "yvvbWBTC",
+      "run_id": "23",
+      "entry_count": 222,
+      "safe_block": "42766030",
+      "safe_block_timestamp": "1789508841",
+      "generated_at": "1789509762",
+      "certification": "provisional"
+    }
+  ],
+  "neonSize": {
+    "bytes": "230359040",
+    "runs": 23,
+    "entries": 29568,
+    "vaults": 21
+  },
+  "publication": {
+    "applied": true,
+    "beforeBytes": 38379520,
+    "afterBytes": 230326272,
+    "maxBytes": 400000000,
+    "vaults": [
+      {
+        "label": "yBOLD",
+        "chainId": 1,
+        "runId": "3",
+        "entries": 1530,
+        "copied": true,
+        "digest": "b6f5cb9266ebc7e20c2c290df66f810f"
+      },
+      {
+        "label": "yvcrvUSD-2",
+        "chainId": 1,
+        "runId": "4",
+        "entries": 4514,
+        "copied": true,
+        "digest": "08df3bb6a4d3686365b39fe7ebfe2d8f"
+      },
+      {
+        "label": "yvDAI-1",
+        "chainId": 1,
+        "runId": "5",
+        "entries": 512,
+        "copied": true,
+        "digest": "8dcca4c89b5c27929a8809316d180ee1"
+      },
+      {
+        "label": "yvSKY-1",
+        "chainId": 1,
+        "runId": "6",
+        "entries": 490,
+        "copied": true,
+        "digest": "915969ac441a7622298ea104543d1ca5"
+      },
+      {
+        "label": "yvUSD",
+        "chainId": 1,
+        "runId": "7",
+        "entries": 1300,
+        "copied": true,
+        "digest": "af74a122b59547e29a823a549bdbc624"
+      },
+      {
+        "label": "yvUSDC-1",
+        "chainId": 1,
+        "runId": "8",
+        "entries": 1878,
+        "copied": true,
+        "digest": "a343a435ad1d4cba9aca62dd1ac3dd17"
+      },
+      {
+        "label": "yvUSDC-2",
+        "chainId": 1,
+        "runId": "9",
+        "entries": 1545,
+        "copied": true,
+        "digest": "5afa21c88cb0cb3bcc34b33945825986"
+      },
+      {
+        "label": "yvUSDS-1",
+        "chainId": 1,
+        "runId": "10",
+        "entries": 1658,
+        "copied": true,
+        "digest": "456653aed7e084c9f8e97b66a0226178"
+      },
+      {
+        "label": "yvUSDT-1",
+        "chainId": 1,
+        "runId": "11",
+        "entries": 1645,
+        "copied": true,
+        "digest": "d869ae0209cf68a5bcfa01931ed17633"
+      },
+      {
+        "label": "yvWBTC-1",
+        "chainId": 1,
+        "runId": "12",
+        "entries": 28,
+        "copied": true,
+        "digest": "e34f91635ecafca39b72a06bacaf97dc"
+      },
+      {
+        "label": "yvWETH-1",
+        "chainId": 1,
+        "runId": "13",
+        "entries": 2163,
+        "copied": true,
+        "digest": "b156d4bc4525cfa6001842ef7741f67b"
+      },
+      {
+        "label": "yvWETH-2",
+        "chainId": 1,
+        "runId": "14",
+        "entries": 1226,
+        "copied": true,
+        "digest": "c5ecffa9b30d057045e7ade287eb90ff"
+      },
+      {
+        "label": "yvyYB",
+        "chainId": 1,
+        "runId": "15",
+        "entries": 660,
+        "copied": true,
+        "digest": "eb587b176cb9c0d3f7be46feed8d1cbf"
+      },
+      {
+        "label": "TYD",
+        "chainId": 8453,
+        "runId": "16",
+        "entries": 936,
+        "copied": true,
+        "digest": "f9fc4c87b607ecc64ea441335b18dda2"
+      },
+      {
+        "label": "yvUSDC-H",
+        "chainId": 8453,
+        "runId": "17",
+        "entries": 1278,
+        "copied": true,
+        "digest": "b65dd7848e8d1381dc21810365339e30"
+      },
+      {
+        "label": "yvAUSD",
+        "chainId": 747474,
+        "runId": "18",
+        "entries": 307,
+        "copied": true,
+        "digest": "78f36d16511e2c78c0778cd36408fb68"
+      },
+      {
+        "label": "yvvbETH",
+        "chainId": 747474,
+        "runId": "19",
+        "entries": 631,
+        "copied": true,
+        "digest": "cc9ab04128f787a8db3edde49370d219"
+      },
+      {
+        "label": "yvvbUSDC",
+        "chainId": 747474,
+        "runId": "20",
+        "entries": 2011,
+        "copied": true,
+        "digest": "8e4b3fff421ecd46aed7f93a841ace9f"
+      },
+      {
+        "label": "yvvbUSDS",
+        "chainId": 747474,
+        "runId": "21",
+        "entries": 7,
+        "copied": true,
+        "digest": "3c1f90f59bc0a4f419425585ea9341e4"
+      },
+      {
+        "label": "yvvbUSDT",
+        "chainId": 747474,
+        "runId": "22",
+        "entries": 1273,
+        "copied": true,
+        "digest": "791fd88ecc64d3f46edbe347f4d77c7a"
+      },
+      {
+        "label": "yvvbWBTC",
+        "chainId": 747474,
+        "runId": "23",
+        "entries": 222,
+        "copied": true,
+        "digest": "eb7a6f2dc6861bebfce144da1bbb4629"
+      }
+    ]
+  },
+  "localApiValidation": {
+    "checkedAt": "2026-09-15T22:04:22.411Z",
+    "mode": "local",
+    "vaults": [
+      {
+        "label": "yBOLD",
+        "chainId": 1,
+        "address": "0x9f4330700a36b29952869fac9b33f45eedd8a3d8",
+        "runId": "3",
+        "chartPagesChecked": 9,
+        "chartEntriesChecked": 202,
+        "panels": 202,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "20237233603257cf0312aa2b8d456ddf3f11058da5a844e0871330f4f4ed1280",
+          "1e8b4e10273aa3f0cfb30286f5f799319ec2825f4935f7ae2f8f146d91de2a37"
+        ],
+        "detailDigest": "9c0f4601138517ae361038a2797d3d6e026e637350e4bc392c95f470685dad73",
+        "snapshot": {
+          "blockNumber": 25985590,
+          "blockTimestamp": 1789508183
+        }
+      },
+      {
+        "label": "yvcrvUSD-2",
+        "chainId": 1,
+        "address": "0xbf319ddc2edc1eb6fdf9910e39b37be221c8805f",
+        "runId": "4",
+        "chartPagesChecked": 65,
+        "chartEntriesChecked": 1604,
+        "panels": 1604,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "e0e5e3888b96d050321860ef4502fe2cf9e3ae9b67eba88c27f6bd942fdf6223",
+          "5c8858e6f2f6832c7b5596a23902527c11faca2aa4ad61cf3a87a4e99b42ea45"
+        ],
+        "detailDigest": "3e3a45320211fe696f06445df38e8cf2f931686e17cc55ece5aa733f26e72abb",
+        "snapshot": {
+          "blockNumber": 25985590,
+          "blockTimestamp": 1789508183
+        }
+      },
+      {
+        "label": "yvDAI-1",
+        "chainId": 1,
+        "address": "0x028ec7330ff87667b6dfb0d94b954c820195336c",
+        "runId": "5",
+        "chartPagesChecked": 4,
+        "chartEntriesChecked": 98,
+        "panels": 98,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "413e0b0deb0285eaf4d02729a56eb56eb04c0da8b7b15a13c4fcb0d0778cb38f",
+          "acca09db7677f5bc0aead38c2d45c8481d9215990189df7fd33629b4dc617734"
+        ],
+        "detailDigest": "a594484d88b72633499c9e5a7440a577a719f093492c01c09780e1a7e31b793d",
+        "snapshot": {
+          "blockNumber": 25985590,
+          "blockTimestamp": 1789508183
+        }
+      },
+      {
+        "label": "yvSKY-1",
+        "chainId": 1,
+        "address": "0xaf71a4f5d93fb88b24c67760bcf9688a6c3a54d4",
+        "runId": "6",
+        "chartPagesChecked": 3,
+        "chartEntriesChecked": 74,
+        "panels": 74,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "b50d3254a0fedc2a7878dac5a53e4ca495dd3777b3c1a1dfd61911b10baa9158",
+          "6a078d2209f86e5780d4a941adfd66f390816aaabd99a1c148425528a43231a0"
+        ],
+        "detailDigest": "8f3fde751929899a24207fa727ff5473d201fd81bb728f0b72e2acbdae41b385",
+        "snapshot": {
+          "blockNumber": 25985590,
+          "blockTimestamp": 1789508183
+        }
+      },
+      {
+        "label": "yvUSD",
+        "chainId": 1,
+        "address": "0x696d02db93291651ed510704c9b286841d506987",
+        "runId": "7",
+        "chartPagesChecked": 5,
+        "chartEntriesChecked": 122,
+        "panels": 122,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "b7928dc329d792498d27015c18510b75babc57447f6295dafbd2e9d67aa96eef",
+          "796889f6797ba9d0d23bd3158b43b54a4af435268549d72394b55bb8ce7ca9b5"
+        ],
+        "detailDigest": "c02c83fd3ceb95ab1ebd7faf191f126101a48902ee479b0492df30ab02aa5e17",
+        "snapshot": {
+          "blockNumber": 25985590,
+          "blockTimestamp": 1789508183
+        }
+      },
+      {
+        "label": "yvUSDC-1",
+        "chainId": 1,
+        "address": "0xbe53a109b494e5c9f97b9cd39fe969be68bf6204",
+        "runId": "8",
+        "chartPagesChecked": 17,
+        "chartEntriesChecked": 421,
+        "panels": 421,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "f9a373defcd183186b14cc498c13961723b2fb9f1d53fcb9ec8d8d35203e5cf6",
+          "e8af95f46b55239336277f399a37aeb4246eb7b621e2545347804d96c2e921da"
+        ],
+        "detailDigest": "abf261c85e7b35f70c489e545dd75e0e43be901e6ca4825961266d322a5e300f",
+        "snapshot": {
+          "blockNumber": 25985590,
+          "blockTimestamp": 1789508183
+        }
+      },
+      {
+        "label": "yvUSDC-2",
+        "chainId": 1,
+        "address": "0xae7d8db82480e6d8e3873ecbf22cf17b3d8a7308",
+        "runId": "9",
+        "chartPagesChecked": 18,
+        "chartEntriesChecked": 443,
+        "panels": 443,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "d05ecee3024da5e04672b58a15ca33ad227bf600b8a722c864deb7ce14cac94f",
+          "de5800dda7ad89589a56babef495a9d39106b7343c2ba4f0e48ea3831719091f"
+        ],
+        "detailDigest": "48ad03c60684ed944217c4b03bd76a0915e6bfd12d160b7ee951c0d3fe7204ed",
+        "snapshot": {
+          "blockNumber": 25985590,
+          "blockTimestamp": 1789508183
+        }
+      },
+      {
+        "label": "yvUSDS-1",
+        "chainId": 1,
+        "address": "0x182863131f9a4630ff9e27830d945b1413e347e8",
+        "runId": "10",
+        "chartPagesChecked": 13,
+        "chartEntriesChecked": 324,
+        "panels": 324,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "1ba9efdd9e1d5b89c0de6ec0fa69b4e2d832eea3a81cc55099d7e34351b94c97",
+          "15b00b0a12bb0c24c38b27b859f7f364e48cc34bf30229a7b1b99059f47b3337"
+        ],
+        "detailDigest": "f70e1fb4c3feb395ad9896331cb4ccf7cd95f1be19f535dafc0d4caff9db9cae",
+        "snapshot": {
+          "blockNumber": 25985622,
+          "blockTimestamp": 1789508567
+        }
+      },
+      {
+        "label": "yvUSDT-1",
+        "chainId": 1,
+        "address": "0x310b7ea7475a0b449cfd73be81522f1b88efafaa",
+        "runId": "11",
+        "chartPagesChecked": 25,
+        "chartEntriesChecked": 612,
+        "panels": 612,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "9bbe26271c0054b67802809c685277876ed76b3ffc0e96d5eae2f6642c58c7bd",
+          "7574c1fa0643b9a772a9a68c4862260de69fb8d0c92d394c17280884004a6b77"
+        ],
+        "detailDigest": "9518f4bf5978e55107ed26d63ca69ad45ebf19f1ce64523cb49cc68a81c7bf81",
+        "snapshot": {
+          "blockNumber": 25985622,
+          "blockTimestamp": 1789508567
+        }
+      },
+      {
+        "label": "yvWBTC-1",
+        "chainId": 1,
+        "address": "0x751f0cc6115410a3ee9ec92d08f46ff6da98b708",
+        "runId": "12",
+        "chartPagesChecked": 1,
+        "chartEntriesChecked": 0,
+        "panels": 0,
+        "issues": 0,
+        "firstTwoPageDigests": ["690b359c77f5997c6e6e71f0f25358c1034f029bac3358c7885f1c3259cec2b4"],
+        "detailDigest": "983e39aa720bcb23c2c05ab30745bdac7c73af881db74e653ef38a4043589c8d",
+        "snapshot": {
+          "blockNumber": 25985622,
+          "blockTimestamp": 1789508567
+        }
+      },
+      {
+        "label": "yvWETH-1",
+        "chainId": 1,
+        "address": "0xc56413869c6cdf96496f2b1ef801fedbdfa7ddb0",
+        "runId": "13",
+        "chartPagesChecked": 31,
+        "chartEntriesChecked": 754,
+        "panels": 754,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "88bce68b04ed8bf154a0bb06030607ae8dd07b447ef4b035fef235fa14331fab",
+          "7a0c9f7adb7fcf692413cd6abf9c10c61add35eba7d4af99944a15f220b9b2df"
+        ],
+        "detailDigest": "d8daa7996e9b84296f182a92bb9df863802f8e116ed77474e93cccdf24f11b82",
+        "snapshot": {
+          "blockNumber": 25985622,
+          "blockTimestamp": 1789508567
+        }
+      },
+      {
+        "label": "yvWETH-2",
+        "chainId": 1,
+        "address": "0xac37729b76db6438ce62042ae1270ee574ca7571",
+        "runId": "14",
+        "chartPagesChecked": 18,
+        "chartEntriesChecked": 449,
+        "panels": 449,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "6b4d7cc3542646f4a323f9833457d05b78236e9e4a1e9976c46b1e7ccb5b4494",
+          "d4dbcd95104d79aaa84188429aa3e63ca5c2ae1ad7c0922df357d42c8c60b2fe"
+        ],
+        "detailDigest": "c229bbcadfd29c1315a41d9b5dafe17f30e3bf019dd73eda225cf9c20b729f80",
+        "snapshot": {
+          "blockNumber": 25985622,
+          "blockTimestamp": 1789508567
+        }
+      },
+      {
+        "label": "yvyYB",
+        "chainId": 1,
+        "address": "0x1f6f16945e395593d8050d6cc33e4328a515b648",
+        "runId": "15",
+        "chartPagesChecked": 1,
+        "chartEntriesChecked": 0,
+        "panels": 0,
+        "issues": 0,
+        "firstTwoPageDigests": ["d9a83141b5ecd0c8977c156c6d537c666c1940e7a9519115f71b600bef30f34b"],
+        "detailDigest": "d489078f56ae57162c08da03ca556a7993793eab036b60f7a9e40d1b2542722a",
+        "snapshot": {
+          "blockNumber": 25985622,
+          "blockTimestamp": 1789508567
+        }
+      },
+      {
+        "label": "TYD",
+        "chainId": 8453,
+        "address": "0xb13cf163d916917d9cd6e836905ca5f12a1def4b",
+        "runId": "16",
+        "chartPagesChecked": 13,
+        "chartEntriesChecked": 322,
+        "panels": 322,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "0deaab01a35176ce1d01bb0701499134f6de9a5ae9fa983f9c54517fc4bf3cf5",
+          "dceca8d28bcdabdbb52e08ad3ba9c24a361b5c2e2e3663ed42be910bade7924b"
+        ],
+        "detailDigest": "3cd575e9569b60029e56614c708118959477fff9d8f6ea36f7bd469959386222",
+        "snapshot": {
+          "blockNumber": 51359599,
+          "blockTimestamp": 1789508545
+        }
+      },
+      {
+        "label": "yvUSDC-H",
+        "chainId": 8453,
+        "address": "0xc3bd0a2193c8f027b82dde3611d18589ef3f62a9",
+        "runId": "17",
+        "chartPagesChecked": 15,
+        "chartEntriesChecked": 353,
+        "panels": 353,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "60f10f4d14ef17fad5ebb03eebc668002f1ba7f5e64deca3e0f91c96b3975371",
+          "d83a509dbe94881c2a5112b7cc30f7baf504eed4a3f436987e3172bc3414f2db"
+        ],
+        "detailDigest": "9a4d5131820e4d9f24353aaa9e6683e825b97269209df22b26cc58d9a98cffca",
+        "snapshot": {
+          "blockNumber": 51359599,
+          "blockTimestamp": 1789508545
+        }
+      },
+      {
+        "label": "yvAUSD",
+        "chainId": 747474,
+        "address": "0x93fec6639717b6215a48e5a72a162c50dcc40d68",
+        "runId": "18",
+        "chartPagesChecked": 1,
+        "chartEntriesChecked": 8,
+        "panels": 8,
+        "issues": 0,
+        "firstTwoPageDigests": ["a4cf63d1379bdcdee0cc09e013f1ffe4127783d3cc7cd8b0afce9b7e1c5ac558"],
+        "detailDigest": "52d33b99c130dbcba98830e0608664a38dcf54403bcc457272be3882bc12b1e9",
+        "snapshot": {
+          "blockNumber": 42765598,
+          "blockTimestamp": 1789508409
+        }
+      },
+      {
+        "label": "yvvbETH",
+        "chainId": 747474,
+        "address": "0xe007ca01894c863d7898045ed5a3b4abf0b18f37",
+        "runId": "19",
+        "chartPagesChecked": 1,
+        "chartEntriesChecked": 21,
+        "panels": 21,
+        "issues": 0,
+        "firstTwoPageDigests": ["e14c0174ca268185fea02ffea05bdd69faaf4eb451a45d12dac6daafa372a1a4"],
+        "detailDigest": "92ffb609dcc067867be79fc9dd7652256596470570cb8552f302ca1a0395d14a",
+        "snapshot": {
+          "blockNumber": 42765598,
+          "blockTimestamp": 1789508409
+        }
+      },
+      {
+        "label": "yvvbUSDC",
+        "chainId": 747474,
+        "address": "0x80c34bd3a3569e126e7055831036aa7b212cb159",
+        "runId": "20",
+        "chartPagesChecked": 2,
+        "chartEntriesChecked": 39,
+        "panels": 39,
+        "issues": 0,
+        "firstTwoPageDigests": [
+          "e8d6ec6bcb5380706efac4f0b8011adcb93649efcfe7bb2870424c8d89fe6ec3",
+          "26cb2e06e7c32f52ca2afdecf4b84e289babb8bdc544ab1f31159f4fd23542a2"
+        ],
+        "detailDigest": "62fd9693d244e4ba2019a3c63955bf7b9a32fa791b29df3c65ddb409249c987c",
+        "snapshot": {
+          "blockNumber": 42765598,
+          "blockTimestamp": 1789508409
+        }
+      },
+      {
+        "label": "yvvbUSDS",
+        "chainId": 747474,
+        "address": "0x8fb1c10ad4417eca341a1d903ff437d25ff87a4e",
+        "runId": "21",
+        "chartPagesChecked": 1,
+        "chartEntriesChecked": 0,
+        "panels": 0,
+        "issues": 0,
+        "firstTwoPageDigests": ["ca3b0a427f8165fd0864c4ca0f87a3237ece82ad499bc201c5eea56a6c1d11b5"],
+        "detailDigest": "a659fed410ce90835975e2b06fd5f0ece7b7500049d79a64ee7147ef57ef260c",
+        "snapshot": {
+          "blockNumber": 42765598,
+          "blockTimestamp": 1789508409
+        }
+      },
+      {
+        "label": "yvvbUSDT",
+        "chainId": 747474,
+        "address": "0x9a6bd7b6fd5c4f87eb66356441502fc7dcdd185b",
+        "runId": "22",
+        "chartPagesChecked": 1,
+        "chartEntriesChecked": 25,
+        "panels": 25,
+        "issues": 0,
+        "firstTwoPageDigests": ["da3ff29bddcd0ac332c5b0be5142518599c4630e48160ad93eac2a68b2d4bdff"],
+        "detailDigest": "2225710902e5c57c312b4d95a2da8fd38727c0cccceff15114a9f13f0de1c73e",
+        "snapshot": {
+          "blockNumber": 42765598,
+          "blockTimestamp": 1789508409
+        }
+      },
+      {
+        "label": "yvvbWBTC",
+        "chainId": 747474,
+        "address": "0xaa0362ecc584b985056e47812931270b99c91f9d",
+        "runId": "23",
+        "chartPagesChecked": 1,
+        "chartEntriesChecked": 25,
+        "panels": 25,
+        "issues": 0,
+        "firstTwoPageDigests": ["684f3fffaf1b9b72b78a4dd1e1a2704767c647ccda865bae92455add6d2dc918"],
+        "detailDigest": "641f8a12f85942dbc3f95859c9e0be08a887e5a8a26ea0e1c0b7d189822ad634",
+        "snapshot": {
+          "blockNumber": 42766030,
+          "blockTimestamp": 1789508841
+        }
+      }
+    ]
+  },
+  "publisherChecks": {
+    "dryRunDoesNotWrite": true,
+    "immutableCollisionRejected": true,
+    "partialPublicationRolledBack": true,
+    "repeatPublicationIdempotent": true,
+    "previousRunsRetained": 2,
+    "sizeCeilingEnforced": true
+  }
+}

@@ -15,10 +15,15 @@ Powerglove's `VITE_PUBLIC_ALLOCATION_HISTORY_API_URL` is
 - The API role has SELECT access to the three prepared-history tables and defaults to read-only transactions.
 - Envio, archive RPC credentials, reconstruction jobs, and the historical RPC cache remain on the local worker.
 
-The initial snapshot contains two immutable yvUSDC-1 runs, each with 1,877 entries. Run 2 is active, through block
-25,949,082. Coverage is provisional. Both runs were restored with their original IDs, payloads, and sequences.
-The standalone local restore occupied 37 MB including database overhead; the compressed migration archive was 3.5 MB.
-These figures describe the initial cohort, not a budget for every vault or unlimited retained runs.
+The current cohort contains 21 active vaults: 13 Ethereum, 2 Base, and 6 Katana, matching
+`docs/coverage-review/proposed-vaults.json`. Runs 3–23 contain 25,814 prepared entries and were rebuilt on September 15,
+2026. Each response carries its own safe-block timestamp; coverage remains provisional. yvFlexUSDC remains deferred.
+
+The original yvUSDC-1 runs 1 and 2 are retained with their original IDs and entries, so their cursors and detail links
+remain valid. Including those retained runs, the serving database has 23 runs and 29,568 entries. The complete local
+publication rehearsal occupied 234,568,727 bytes (234.6 MB), about 47% of the conservative 500 MB Free allowance.
+After publication, Neon measured 230,359,040 bytes (230.4 MB), about 46% of the 500 MB allowance.
+This is room for the current cohort, not unlimited retained refreshes. The historical RPC cache remains on the worker.
 
 ## Serving configuration
 
@@ -28,7 +33,7 @@ Production uses:
 - `DATABASE_MAX_CONNECTIONS=2`.
 - `DATABASE_CONNECTION_TIMEOUT_MS=15000`, allowing time for an idle database to wake.
 - `ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION=true`.
-- `ALLOCATION_VAULTS_JSON`: chain 1, address `0xbe53a109b494e5c9f97b9cd39fe969be68bf6204`, label `yvUSDC-1`.
+- `ALLOCATION_VAULTS_JSON`: the 21-vault cohort in `docs/coverage-review/proposed-vaults.json`.
 
 The reader's database-level role setting resolves the `allocation_reference` schema without session-level SET commands.
 The hosted database contains the serving snapshot only. Do not run the reconstruction CLI or schema migrations against
@@ -44,9 +49,28 @@ There is no scheduled refresh. The safe-block timestamp in responses describes t
 
 ## Updating the dataset
 
-Reconstruct and validate new runs on the worker first. Publication must append complete immutable runs and entries,
-preserve existing run IDs, advance identity sequences, and switch the active-run pointer transactionally. Existing
-cursor and detail links must remain valid. An append-publication command is not implemented yet; the initial dump/restore
+Reconstruct and validate new runs on the worker first. `scripts/allocation-publish.ts` copies the selected vaults' active
+runs into the existing `allocation_reference` schema. It retains previously published runs, rejects conflicting IDs or
+changed immutable data, verifies copied metadata and entry fingerprints, advances identity sequences, and activates the
+entire selected cohort in one transaction. API readers continue seeing the previous committed data until that transaction
+commits. A failed publication rolls back without changing the active references.
+
+Put `ALLOCATION_SOURCE_DATABASE_URL`, `ALLOCATION_PUBLISH_DATABASE_URL`, and
+`ALLOCATION_ALLOW_UNCERTIFIED_MATERIALIZATION=true` in an ignored local `.env.publish` file. The target URL must be a direct
+writer connection, not the API's reader credential. Never upload this file or configure the writer on Vercel.
+
+```bash
+# Plan only; no target writes.
+bun --env-file=.env.publish run allocation:publish --vaults-file=docs/coverage-review/proposed-vaults.json
+
+# Apply only after rehearsing and measuring an isolated copy of the hosted database.
+bun --env-file=.env.publish run allocation:publish --vaults-file=docs/coverage-review/proposed-vaults.json --apply
+```
+
+The default target database ceiling is 400,000,000 bytes, leaving room below Neon Free's 0.5 GB allowance. The publisher
+checks database size before and during copying and before commit. A dry run checks compatibility and fingerprints but does
+not estimate installed size: measure a local rehearsal first. `--max-target-bytes=<bytes>` changes the ceiling explicitly.
+Only prepared projections, runs, and entries are copied; the RPC cache stays on the worker. The initial dump/restore
 procedure is for an empty target and must not be replayed over the live database.
 
 Keep local copies of published runs. Neon Free has limited restore history and a 0.5 GB storage allowance; retained runs
@@ -62,6 +86,13 @@ provisional quality and original safe-block timestamps intact.
 Initial hosted validation on 2026-09-15 passed health, two chart pages (25 entries each), a run-2 detail request, and
 cross-origin response headers. Powerglove's existing parser accepted both pages and built 51 panels with no reconciliation
 issues. The production build and TypeScript checks passed on Vercel. The deployment upload contained no environment files.
+
+The expanded cohort rehearsal validated all 245 chart pages (5,896 visible entries), full-history access, and pinned details
+for all 21 vaults with Powerglove's actual parser and panel reconciliation. yvvbUSDS has no chart-visible reallocations;
+its current snapshot and seven full-history entries remain available. Publication checks covered dry-run behavior,
+immutable-data collision rejection, transaction rollback, idempotent re-publication, retained old runs, and the size ceiling.
+The source manifest, installed size, copy fingerprints, and rehearsal results are recorded in
+[`hosted-dataset-validation.json`](hosted-dataset-validation.json).
 
 Vercel's native GitHub integration deploys pushes to `main`. Other branches do not automatically deploy because database
 credentials are configured only for production. GitHub Actions runs the verification workflow; the former Yearn-specific

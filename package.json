@@ -12,6 +12,7 @@
     "db:migrate": "bun run scripts/db-migrate.ts",
     "allocation:backfill": "bun --smol run scripts/allocation-materialize.ts --mode=backfill",
     "allocation:refresh": "bun --smol run scripts/allocation-materialize.ts --mode=refresh",
+    "allocation:publish": "bun run scripts/allocation-publish.ts",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "test": "vitest run",
