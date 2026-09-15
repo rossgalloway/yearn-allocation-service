@@ -92,7 +92,8 @@ Provisional responses use `Cache-Control: no-store`. A failed refresh leaves the
 
 Kong can replace the Envio reader with its stored-event reader. No extra GraphQL API, ingestion service, scheduler,
 or production-equivalence system is required here. The captured Kong sample pack remains unchanged and is reference material,
-not the current response schema. See [the contract](docs/data-contract.md) and [database runbook](docs/database.md).
+not the current response schema. See [the contract](docs/data-contract.md), [database runbook](docs/database.md),
+and [hosted test environment](docs/hosting.md).
 
 ## Run locally
 
