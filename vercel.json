@@ -2,7 +2,10 @@
   "framework": "nextjs",
   "regions": ["iad1"],
   "installCommand": "bun install --frozen-lockfile",
-  "github": {
-    "enabled": false
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "*": false
+    }
   }
 }

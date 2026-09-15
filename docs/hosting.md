@@ -9,6 +9,7 @@ Powerglove's `VITE_PUBLIC_ALLOCATION_HISTORY_API_URL` is
 ## Infrastructure
 
 - Vercel project: `rossgalloways-projects/yearn-allocation-reference`.
+- GitHub repository: `rossgalloway/yearn-allocation-service`; production branch: `main`.
 - Neon resource: `yearn-allocation-reference`, Free plan (`free_v3`), region `iad1`.
 - Vercel uses the same region and a pooled TLS connection with the `allocation_api_reader` role.
 - The API role has SELECT access to the three prepared-history tables and defaults to read-only transactions.
@@ -62,8 +63,10 @@ Initial hosted validation on 2026-09-15 passed health, two chart pages (25 entri
 cross-origin response headers. Powerglove's existing parser accepted both pages and built 51 panels with no reconciliation
 issues. The production build and TypeScript checks passed on Vercel. The deployment upload contained no environment files.
 
-GitHub automatic deployment is disabled in `vercel.json`. Deployment is an explicit CLI action; no database work occurs
-during a build or public API request.
+Vercel's native GitHub integration deploys pushes to `main`. Other branches do not automatically deploy because database
+credentials are configured only for production. GitHub Actions runs the verification workflow; the former Yearn-specific
+deployment workflow is removed. No database work occurs during a build or public API request. Refreshing the hosted dataset
+remains a separate manual operation from deploying API code.
 
 `.vercelignore` explicitly excludes local environment files, dependencies, and build output. Vercel CLI uploads must not
 rely on `.gitignore` for credential exclusion. Check the deployment file listing before sharing a new deployment.
